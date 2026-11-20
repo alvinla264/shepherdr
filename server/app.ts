@@ -8,6 +8,7 @@ import { buildId } from '../shared/build.ts'
 import { fileType } from '../shared/files.ts'
 import type { Action, AddSpace, ServerEvent, UpdateStatus, WorktreeAsk } from '../shared/types.ts'
 import { frameResponse, wrapPage } from './frame.ts'
+import { markdownResponse } from './markdown-preview.ts'
 import type { Source } from './source.ts'
 import type { Push } from './push.ts'
 
@@ -130,6 +131,7 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
           return json({ chat: source.chat(key) ?? null, status: source.chatStatus?.(key) })
         }
         if (path === '/api/snapshot') return json(source.snapshot())
+        if (path === '/api/markdown-preview') return source.kind === 'live' ? markdownResponse(req) : json({ error: 'Not available here.' }, 404)
         // which Shepherdr answers: a start from another plugin folder or version stops it (scripts/plugin.ts)
         if (path === '/api/version') return json(running())
         // the updater restarts the server only once it has stopped new calls and none is on; both at once, so no call
@@ -319,7 +321,7 @@ export function sameSite(req: Request, path: string): boolean {
   if (writes && origin !== null && req.headers.get('x-shepherdr') !== '1') return false
   // fetch metadata: a cross-site request is never let through, Origin or not
   const site = req.headers.get('sec-fetch-site')
-  if (site === 'cross-site' && (writes || path === '/api/ws' || path === '/api/voice' || path === '/api/browser' || path === '/api/file' || path === '/api/folders' || path === '/api/worktree' || path === '/api/activity' || path === '/api/chat')) return false
+  if (site === 'cross-site' && (writes || path === '/api/ws' || path === '/api/voice' || path === '/api/browser' || path === '/api/file' || path === '/api/markdown-preview' || path === '/api/folders' || path === '/api/worktree' || path === '/api/activity' || path === '/api/chat')) return false
   return true
 }
 

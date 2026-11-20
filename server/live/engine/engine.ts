@@ -1,4 +1,6 @@
 import { TaskIds } from '../task-ids.ts'
+import { createHash } from 'node:crypto'
+import { piJobLine, piJobToken, piJobWaiting, PI_JOBS_WAIT_MS } from '../readers/pi-task-state.ts'
 import { trustWorktree } from '../trust.ts'
 // The tasks engine. A task is added by a coordinator and at once gets one agent, in its own git worktree and branch
 // from main. The coordinator's brief is the agent's first message and decides everything else (wait for a go, plan
@@ -540,6 +542,8 @@ export class Engine extends Emitter<Events> {
       if (this.handing.has(t.id) && t.tookOver) return fitStatus(`${CLI_NAME[t.tookOver.to] ?? t.tookOver.to} takes over: ${t.tookOver.why}`)
       const r = this.retry?.(key)
       if (r?.due) return `${r.reason} · retry in ${inMins(r.due)}`
+      const pi = this.agents.piJobs(key)
+      if (pi && pi.phase === 'idle') return piJobLine(pi)
       return 'Working'
     })()
     return s.length > 90 ? `${s.slice(0, 89).trimEnd()}…` : s
@@ -653,6 +657,8 @@ export class Engine extends Emitter<Events> {
     const cli = CLI_NAME[rec?.kind ?? t.agent?.kind ?? ''] ?? this.settings.get('task.agent', this.nameOf(t))
     const sub = this.subOf(t, status)
     const doneAt = status === 'done' ? (t.doneAt ?? t.updated) : undefined
+    const report = this.retrying(t) || this.handing.has(t.id) ? undefined : reportOf(t.report, status)
+    const pi = this.agents.piJobs(key)
     return {
       id: t.id,
       name: t.title,
@@ -677,7 +683,7 @@ export class Engine extends Emitter<Events> {
       archived: t.archived,
       pinned: t.pinned,
       // waiting out the provider, or a backup taking over: that line shows, not what its agent last reported
-      report: this.retrying(t) || this.handing.has(t.id) ? undefined : reportOf(t.report, status),
+      report: report && pi && piJobWaiting(pi) && status === 'work' ? { ...report, msg: piJobLine(pi) } : report,
     }
   }
 
@@ -697,6 +703,11 @@ export class Engine extends Emitter<Events> {
       if (t.stalled?.life !== undefined && life > t.stalled.life) t.stalled.life = undefined
       const quiet = now - life >= STALL_QUIET && t.stalled?.life === undefined
       const over = r?.left !== undefined && r.at !== t.stalled?.over && now - r.at > (r.left + Math.max(r.left, 20)) * 60_000
+      const pi = this.agents.piJobs(this.key(t), now)
+      // Silence alone is expected during an auto-waking job, but never suppress an
+      // exceeded estimate or a wait longer than the bounded supervision window.
+      const since = pi?.oldestStartedAt || pi?.changedAt || now
+      if (pi && piJobWaiting(pi) && !over && now - since < PI_JOBS_WAIT_MS) continue
       if (!quiet && !over) continue
       t.stalled = { life: quiet ? life : t.stalled?.life, over: r?.at }
       const mins = Math.max(0, Math.round((now - (quiet ? life : r!.at + r!.left! * 60_000)) / 60_000))
@@ -724,19 +735,23 @@ export class Engine extends Emitter<Events> {
     const key = this.key(t)
     const mins = (ms: number) => `${Math.max(0, Math.round(ms / 60_000))}m`
     const r = t.report
+    const pi = this.agents.piJobs(key, now)
     const bg = this.agents.status(key) !== 'working' && this.agents.background(key)
     const ran = { agents: 'a subagent', shells: 'a shell', servers: 'a server' }
     const why =
       quietSince === undefined
         ? `it has worked ${mins(now - r!.at)} since its agent said ${r!.left}m were left`
-        : bg
+        : pi && piJobWaiting(pi)
+          ? `its Pi agent is waiting on background work or completion delivery, and nothing has changed for ${mins(now - quietSince)}`
+          : bg
           ? `its agent's turn ended while ${ran[bg]} it started runs on, and nothing has changed for ${mins(now - quietSince)}`
           : `its agent shows as working, but nothing has changed for ${mins(now - quietSince)}: no new output, status report or commit`
     const heard = this.heard.get(t.id)
     const last = r ? `Its last status: "${r.msg}", ${r.progress}% done${heard ? `, ${mins(now - heard)} ago` : ''}` : 'It has reported no status'
     const info = this.agents.info(key)
     const alive = !info ? 'herdr shows no pane for its agent' : info.agent ? 'its agent process is running' : 'herdr sees no agent CLI running in its pane'
-    return `${t.id} may have stalled: ${why}. ${last}; ${alive}. Nudge it (shepherdr task tell ${t.id} "…"), stop it, or tell the human`
+    const pending = pi && piJobWaiting(pi) ? ` ${piJobLine(pi)}; inspect its job/deadline rather than sending a continuation.` : ''
+    return `${t.id} may have stalled: ${why}. ${last}; ${alive}.${pending} Inspect task show --json and chat first. For a continuation use shepherdr task nudge ${t.id} "…" --observed <runtime.observed>; it rechecks before delivery. Use task tell only for a deliberate intervention, or tell the human`
   }
 
   /* ---------- queued after other tasks ---------- */
@@ -2016,6 +2031,40 @@ export class Engine extends Emitter<Events> {
     await this.agents.send(this.key(t), text, { ensure: () => this.launch(t) })
     this.youWrote(this.key(t))
     return {}
+  }
+
+  /** A snapshot token for conditional supervision, not an authorization token. Heartbeats don't change it. */
+  nudgeState(t: TaskRec) {
+    const key = this.key(t)
+    const pi = this.agents.piJobs(key)
+    const observed = createHash('sha256').update(JSON.stringify([
+      t.id, t.updated, t.stopped, t.paused, t.reported, t.archived,
+      this.agents.record(key)?.started, this.agents.info(key)?.pane_id,
+      this.agents.status(key), this.lifeOf(t), pi && piJobToken(pi),
+    ])).digest('hex')
+    return { observed, backgroundJobs: pi ? { line: piJobLine(pi), phase: pi.phase, running: pi.running,
+      autoWake: pi.autoWake, completionPending: pi.completionPending, oldestStartedAt: pi.oldestStartedAt } : undefined }
+  }
+
+  /** A best-effort automatic continuation; never resumes a stopped/paused/queued task. */
+  async nudge(id: string, text: string, observed: string): Promise<{ skipped?: string }> {
+    if (!text.trim() || !/^[0-9a-f]{64}$/.test(observed)) throw new Error('task nudge needs text and --observed from task show --json')
+    const t = this.req(id)
+    const key = this.key(t)
+    const r = await this.agents.nudge(key, text, () => {
+      if (this.task(t.id) !== t) return 'task was removed'
+      if (this.nudgeState(t).observed !== observed) return 'task activity changed since it was inspected'
+      if (t.stopped || t.paused || t.archived || t.todo || t.reported || t.trouble || ended(t) || this.queued(t) || this.holding(t)) return 'task is not awaiting an automatic continuation'
+      if (this.asks(key)) return 'agent is waiting for an explicit answer'
+      const st = this.agents.status(key)
+      if (st !== 'idle' && st !== 'done') return 'agent is working, blocked or unavailable'
+      const pi = this.agents.piJobs(key)
+      if (pi && piJobWaiting(pi)) return piJobLine(pi)
+      if (this.agents.background(key)) return 'background work will wake the agent'
+      return undefined
+    })
+    if (!r.skipped) this.youWrote(key)
+    return r
   }
 
   /** a task held before it ever started: it has no agent yet, so what you write starts it (tell) */

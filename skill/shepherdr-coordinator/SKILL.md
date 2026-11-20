@@ -71,8 +71,13 @@ How to do the work inside a task is its agent's judgment, not yours.
    what comes next, and whether the human needs to know or do anything ("Letter garden is live. TG-30 (sticker book)
    starts next, nothing needed from you."). Several pieces of news at once get one reply. Only news with no card in
    your chat may get `<no-reply>` when nothing matters.
-   Stalled news (a working task quiet for 20m, or far past its own time left) is only time and liveness: look at its
-   chat, then nudge it (`shepherdr task tell`), stop it, or tell the human.
+   Stalled news is time and liveness, not proof that the agent needs a continuation. Read its chat and
+   `shepherdr task show <id> --json`: `runtime.backgroundJobs` says whether Pi is waiting on an automatic wake or
+   completion delivery. Leave those waits alone; an exceeded estimate or a wait over 30m calls for inspecting the
+   job/deadline, not a blind continuation. For a genuinely idle unfinished agent, use
+   `shepherdr task nudge <id> "<continuation>" --observed "<runtime.observed>"` from that inspection. A skipped nudge
+   means re-inspect, not retry through tell. `task tell` remains for human messages, an explicit go, or a deliberate
+   intervention justified by evidence. Unknown/stale background state means inspect or ask the human.
 4. **Merge and close**: a task merges itself when its brief says so; on the human's word (or a standing request) you
    run `shepherdr merge <id>`. A task whose work is over with nothing to merge: `shepherdr task close <id>`.
 5. **Main red**: tasks merge without waiting for GitHub's checks unless Settings say so, so news may say main went red

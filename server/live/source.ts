@@ -2835,8 +2835,13 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     switch (sub) {
       case 'show': {
         const v = this.engine.view(t)
-        if (p.flags.has('json')) return JSON.stringify(v, null, 2)
-        return [`${v.id} ${v.name}`, `State: ${v.state}${statusLine(v) ? ` · ${statusLine(v)}` : ''}${v.pinned ? ' · pinned' : ''}`, `Added: ${v.created}`, v.branch ? `Branch: ${v.branch}` : '', v.base ? `Merges into: ${v.base}` : '', v.desc ? `\n${v.desc}` : ''].filter(Boolean).join('\n')
+        const runtime = this.engine.nudgeState(t)
+        if (p.flags.has('json')) return JSON.stringify({ ...v, runtime }, null, 2)
+        return [`${v.id} ${v.name}`, runtime.backgroundJobs?.line ?? '', `State: ${v.state}${statusLine(v) ? ` · ${statusLine(v)}` : ''}${v.pinned ? ' · pinned' : ''}`, `Added: ${v.created}`, v.branch ? `Branch: ${v.branch}` : '', v.base ? `Merges into: ${v.base}` : '', v.desc ? `\n${v.desc}` : ''].filter(Boolean).join('\n')
+      }
+      case 'nudge': {
+        const r = await this.engine.nudge(t.id, rest.slice(1).join(' '), one(p, 'observed') ?? '')
+        return r.skipped ? `Skipped nudge to ${t.id}: ${r.skipped}.` : `Submitted conditional nudge to ${t.id}; Pi discards it if its state changes in transit.`
       }
       case 'tell': {
         // a coordinator's go to a task that waits starts it only when this machine has room

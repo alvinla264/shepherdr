@@ -83,3 +83,29 @@ Access and limits are behind an expansion:
 
 The new `autopilot.*` settings, `autopilot-run` action, optional mode `keepWorkers` and optional
 `SettingRow.instructions` are additive. Existing plugin names, `definePlugin` and registry slots remain unchanged.
+
+## Pi background jobs and conditional nudges
+
+With the companion `tedious_task` extension, an idle Pi may be waiting for a detached job to finish and wake it.
+On the local Linux host, Shepherdr reads a private, atomic lease in `~/.local/state/shepherdr-pi-jobs/`, matched to
+Herdr socket, pane and Pi session. It accepts only a fresh (30s), owner-only regular file with a matching live
+process/start time and boot identity. Leases renew every 5s without changing the activity revision. No command,
+output or credential is published. Other CLIs retain their existing background detection; remote helpers do not
+read local leases. Missing or stale state is unknown, not evidence that no jobs run.
+
+`shepherdr task show <id> --json` includes `runtime.backgroundJobs` and `runtime.observed`. Automatic continuations
+use `shepherdr task nudge <id> "<continuation>" --observed "<runtime.observed>"`, not `task tell`. It rechecks after
+asynchronous preparation and never starts a worker or queues a nudge for later. Pi also checks the activity revision
+and its own idle/pending-job state when the input arrives; a resumed worker discards a stale continuation. Submission
+is not an acknowledgement that Pi accepted it. Ordinary chat and `task tell` are unchanged.
+
+An auto-waking job or a queued completion keeps the task at work unless it has an explicit question/permission
+prompt. Silent waiting alone is not stalled news during the first 30 minutes of the oldest auto-waking job. An
+exceeded estimate or longer wait still raises news for inspection; a conditional nudge continues to skip pending
+work. Investigate the job/deadline and use a deliberate intervention only when justified. Jobs whose notifications
+were disabled do not promise a wake or suppress silence checks. A delivered notification has at most 30s of handoff
+grace; the next Pi run clears it. Session shutdown removes the lease, and stale/crashed records expire.
+
+The extension changes take effect on the next load. Do not reload a worker with running jobs: its existing shutdown
+handler terminates its detached jobs. Existing coordinators need to read the updated coordinator skill before
+using the new supervision procedure.

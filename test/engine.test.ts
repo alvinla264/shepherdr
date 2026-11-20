@@ -397,7 +397,7 @@ describe('a task is its brief and one agent', () => {
     busy(29)
     expect(stalled()).toEqual([])
     busy(31)
-    expect(stalled()).toEqual([`${t.id} may have stalled: it has worked 31m since its agent said 10m were left. Its last status: "Building", 50% done, 31m ago; herdr sees no agent CLI running in its pane. Nudge it (shepherdr task tell ${t.id} "…"), stop it, or tell the human`])
+    expect(stalled()).toEqual([`${t.id} may have stalled: it has worked 31m since its agent said 10m were left. Its last status: "Building", 50% done, 31m ago; herdr sees no agent CLI running in its pane. Inspect task show --json and chat first. For a continuation use shepherdr task nudge ${t.id} "…" --observed <runtime.observed>; it rechecks before delivery. Use task tell only for a deliberate intervention, or tell the human`])
     expect(w.cards.filter((c) => c.status === 'work').map((c) => c.sub)).toEqual(['may be stuck: 21m past its time left'])
     busy(60)
     expect(stalled().length).toBe(1)

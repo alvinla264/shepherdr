@@ -94,7 +94,11 @@ Tasks (coordinators add them; only when the human asks, or on Autopilot)
                                                  which clears its queue itself if the message is a go
   shepherdr task list [--space NAME] [--json] [--archived]
                                                  archived tasks are left out; --archived lists only them
-  shepherdr task show <id> [--json]
+  shepherdr task show <id> [--json]             includes runtime.observed and Pi background-job state
+  shepherdr task nudge <id> "<text>" --observed TOKEN
+                                                 automatic continuation only: TOKEN is runtime.observed from show
+                                                 --json. Skips changed/busy/waiting agents; never queues or starts one.
+                                                 Use tell for human messages or a deliberate intervention instead
   shepherdr task tell <id> "<text>"            from a coordinator, a go to a task that waits (To do, Queued) waits
                                                  too while the machine has no room (Settings → the machine), and it
                                                  says so; Shepherdr hands it over once there's room

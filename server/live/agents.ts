@@ -1,4 +1,6 @@
 import { chatProblem } from './readers/index.ts'
+import { piJobToken, piJobWaiting, readPiJobState, type PiJobState } from './readers/pi-task-state.ts'
+import { socketPath } from './herdr.ts'
 import { LinkBackoff } from './recovery.ts'
 // Every agent Shepherdr talks to is an ordinary herdr agent. This keeps which herdr agent and which log files belong
 // to each chat, starts and resumes agents, and sends what you write: at once, even while the agent works (Claude Code,
@@ -364,7 +366,20 @@ export class Agents extends Emitter<Events> {
   }
 
   status(key: string): AgentStatus | 'gone' {
-    return statusFrom(this.said(key), this.info(key)?.agent_status ?? 'gone')
+    const seen = statusFrom(this.said(key), this.info(key)?.agent_status ?? 'gone')
+    // A fresh extension report can see Pi resume before herdr's screen reader does.
+    return seen !== 'gone' && seen !== 'blocked' && this.piJobs(key)?.phase === 'active' ? 'working' : seen
+  }
+
+  /** Local host only: never mistake a mirrored/remote process for a local Pi with the same pane id. */
+  piJobs(key: string, now = Date.now()): PiJobState | undefined {
+    const r = this.records[key]
+    const info = this.info(key)
+    if (BOX || r?.kind !== 'pi' || r.finished || !info?.agent) return
+    const ref = info.agent_session
+    return readPiJobState({ socket: socketPath(), pane: info.pane_id,
+      sessionPath: ref?.kind === 'path' ? ref.value : undefined,
+      sessionId: ref?.kind === 'id' ? ref.value : r.sessionId }, now)
   }
 
   private codexState = new Map<string, AgentRuntime>()
@@ -550,6 +565,12 @@ export class Agents extends Emitter<Events> {
   /** what its hooks said still ran as its turn ended, else its session file, else its screen; a shell that is a
    *  headless reviewer counts as a subagent. However long it has run (background() leaves shells out after a while) */
   stillRuns(key: string): Background | undefined {
+    const st = this.status(key)
+    if (st !== 'working' && st !== 'blocked' && st !== 'gone') {
+      const pi = this.piJobs(key)
+      // Not the short shell heuristic: the extension explicitly promises an automatic wake.
+      if (pi && piJobWaiting(pi)) return 'agents'
+    }
     const what = this.ranOn(key)
     return what && what !== 'agents' && this.reviewers.runs(key) ? 'agents' : what
   }
@@ -568,6 +589,8 @@ export class Agents extends Emitter<Events> {
 
   /** what still runs in the background, read again: from the screen where there is no session file. A change is told
    *  as a status change, since the agent may have woken, said a word and stopped again in between herdr's looks. */
+  private piSeen = new Map<string, string | undefined>()
+
   private async readBackground() {
     for (const key of this.byName.values()) {
       if (this.stopped) return
@@ -587,7 +610,10 @@ export class Agents extends Emitter<Events> {
       if (!what) this.seen.delete(key)
       else if (was?.what !== what || was.turn !== turn) this.seen.set(key, { what, since: Date.now(), turn })
       const now = this.background(key)
-      if (now === this.bg.get(key)) continue
+      const pi = this.piJobs(key)
+      const token = pi && piJobToken(pi)
+      if (now === this.bg.get(key) && token === this.piSeen.get(key)) continue
+      this.piSeen.set(key, token)
       this.bg.set(key, now)
       this.emit('status', key, st)
     }
@@ -998,7 +1024,34 @@ export class Agents extends Emitter<Events> {
     return p
   }
 
-  private async sendNow(key: string, text: string, { reaction, ensure, cid, idle, command, generation }: SendOpts): Promise<Sent> {
+  /** Conditional supervision only. Never starts an agent, waits in an outbox, or changes ordinary send(). */
+  async nudge(key: string, text: string, check: () => string | undefined): Promise<{ skipped?: string }> {
+    const initialPi = this.piJobs(key)
+    const expectedPiToken = initialPi && piJobToken(initialPi)
+    await this.beforeInput?.(key)
+    await this.refresh()
+    const skipped = check()
+    if (skipped) return { skipped }
+    if (this.holdOf(key) || this.outbox.some((o) => o.key === key)) return { skipped: 'input is held or already queued' }
+    const pi = this.piJobs(key)
+    if (this.records[key]?.kind === 'pi' && !pi) return { skipped: 'Pi background state is unknown or stale; inspect before intervening' }
+    if (pi && piJobToken(pi) !== expectedPiToken) return { skipped: 'Pi activity changed during delivery preparation' }
+    if (pi && (pi.phase !== 'idle' || piJobWaiting(pi))) return { skipped: 'Pi is active or waiting for its own notification' }
+    // Keep the inspected token, never upgrade a stale decision to a newer token.
+    const payload = pi ? `[[shepherdr-auto-nudge:${expectedPiToken}]]\n${text}` : text
+    try {
+      await herdr.prompt(this.records[key].name, payload)
+    } catch (e) {
+      if (holdFrom(e)) return { skipped: 'agent became unavailable; the nudge was not queued' }
+      throw e
+    }
+    const item: OutItem = { id: randomUUID(), key, text, at: Date.now() }
+    this.went(item)
+    this.emit('sent', item)
+    return {}
+  }
+
+   private async sendNow(key: string, text: string, { reaction, ensure, cid, idle, command, generation }: SendOpts): Promise<Sent> {
     if (cid?.startsWith('requested-news:') && this.newsReceipts.includes(cid)) return { waiting: false, item: { id: cid, cid, key, text, at: Date.now() } }
     const again = cid && this.outbox.find((o) => o.cid === cid)
     if (again) return { waiting: true, waitsFor: this.whyWaits(key), item: again }

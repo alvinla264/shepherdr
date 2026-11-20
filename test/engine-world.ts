@@ -4,6 +4,7 @@ import { execSync } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { piJobWaiting, type PiJobState } from '../server/live/readers/pi-task-state.ts'
 
 process.env.SHEPHERDR_HOME = mkdtempSync(join(tmpdir(), 'shep-engine-'))
 export const { Engine } = await import('../server/live/engine/engine.ts')
@@ -33,6 +34,7 @@ export function world(herdr = fakeHerdr(), o: { boot?: string } = {}) {
   const outbox: string[] = []
   /** work an agent started in the background that still runs: a subagent, or shells */
   const bg: Record<string, string | undefined> = {}
+  const pi: Record<string, PiJobState | undefined> = {}
   /** what an agent reports of itself through its hooks */
   const said: Record<string, Said | undefined> = {}
   const routed: Record<string, boolean> = {}
@@ -55,7 +57,14 @@ export function world(herdr = fakeHerdr(), o: { boot?: string } = {}) {
       return { waiting: false, item: {} }
     },
     status: (key: string) => status[key] ?? 'gone',
-    background: (key: string) => bg[key],
+    piJobs: (key: string) => pi[key],
+    background: (key: string) => bg[key] ?? (pi[key] && piJobWaiting(pi[key]!) ? 'agents' : undefined),
+    nudge: async (key: string, text: string, check: () => string | undefined) => {
+      const skipped = check()
+      if (skipped) return { skipped }
+      sent.push({ key, text })
+      return {}
+    },
     said: (key: string) => said[key],
     record: (key: string) => records[key],
     info: (key: string) => (status[key] && status[key] !== 'gone' && panes[key] ? { pane_id: panes[key] } : undefined),
@@ -113,7 +122,7 @@ export function world(herdr = fakeHerdr(), o: { boot?: string } = {}) {
     outbox.splice(0, outbox.length, ...outbox.filter((k) => k !== key))
     engine.sent(key)
   }
-  return { routed, agents, engine, places, settings, started, sent, posted, status, records, news, newsTo, cards, agentIs, brief, herdr, chat, bg, forgot, said, stopped }
+  return { routed, agents, engine, places, settings, started, sent, posted, status, records, news, newsTo, cards, agentIs, brief, herdr, chat, bg, pi, forgot, said, stopped }
 }
 
 export const until = async (f: () => boolean, ms = 8000) => {
