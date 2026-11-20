@@ -95,9 +95,17 @@ read local leases. Missing or stale state is unknown, not evidence that no jobs 
 
 `shepherdr task show <id> --json` includes `runtime.backgroundJobs` and `runtime.observed`. Automatic continuations
 use `shepherdr task nudge <id> "<continuation>" --observed "<runtime.observed>"`, not `task tell`. It rechecks after
-asynchronous preparation and never starts a worker or queues a nudge for later. Pi also checks the activity revision
-and its own idle/pending-job state when the input arrives; a resumed worker discards a stale continuation. Submission
-is not an acknowledgement that Pi accepted it. Ordinary chat and `task tell` are unchanged.
+asynchronous preparation and never starts a worker or queues a nudge for later. The continuation then waits its turn in
+that agent's own delivery queue and is judged once more as the text is handed to herdr, with nothing left to await on
+Shepherdr's side, so a human message sent first, or still on its way, supersedes it and a busy or changed agent drops it instead of
+holding it. A continuation already being handed over cannot be taken back: a human message that arrives then follows it. Its last
+check runs as the request is written to herdr on this machine; for an agent on another machine the request is handed
+to the ssh bridge before that bridge reaches its herdr, and the agent reading the text is outside what Shepherdr can
+revalidate either way. Pi checks the
+activity revision and its own idle/pending-job state again when the input arrives, and a resumed worker discards a
+stale continuation. Other CLIs cannot revalidate on receipt, so for them a change that lands after that final verdict
+is not detectable by a sender. Submission is not an acknowledgement that Pi accepted it. Ordinary chat and `task tell`
+are unchanged.
 
 An auto-waking job or a queued completion keeps the task at work unless it has an explicit question/permission
 prompt. Silent waiting alone is not stalled news during the first 30 minutes of the oldest auto-waking job. An

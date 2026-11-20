@@ -82,7 +82,7 @@ function open(path: string): Conn {
 /** herdr's socket refused the connection or is not there: herdr is down or restarting */
 const gone = (e: Error & { code?: string }) => ['ECONNREFUSED', 'ENOENT', 'ECONNRESET', 'EPIPE'].includes(e.code ?? '') || /ECONNREFUSED|ENOENT/.test(e.message)
 
-export async function rpc<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 10_000, path = socketPath()): Promise<T> {
+export async function rpc<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 10_000, path = socketPath(), guard?: () => string | undefined): Promise<T> {
   const id = `shep-${Date.now().toString(36)}-${++n}`
   return new Promise<T>((resolve, reject) => {
     let buf = ''
@@ -96,7 +96,12 @@ export async function rpc<T = unknown>(method: string, params: Record<string, un
       f()
     }
     const timer = setTimeout(() => finish(() => reject(new HerdrError('timeout', `herdr ${method} timed out`))), timeoutMs)
-    sock.on('connect', () => sock.write(`${JSON.stringify({ id, method, params })}\n`))
+    sock.on('connect', () => {
+      // the last word before the request goes out: a caller that must not send a stale one refuses here
+      const why = guard?.()
+      if (why) return finish(() => reject(new HerdrError('refused', why)))
+      sock.write(`${JSON.stringify({ id, method, params })}\n`)
+    })
     sock.on('data', (d) => {
       buf += d.toString('utf8')
       let i: number
@@ -192,7 +197,7 @@ export const herdr = {
   createTab: (workspace_id: string, label: string, cwd: string, env: Record<string, string> = {}) =>
     rpc<{ tab: { tab_id: string }; root_pane: { pane_id: string } }>('tab.create', { workspace_id, label, cwd, env, focus: false }),
   start: (name: string, kind: string, pane_id: string, args: string[] = []) => rpc<{ agent: AgentInfo }>('agent.start', { name, kind, pane_id, args, timeout_ms: 60_000 }, 70_000),
-  prompt: (target: string, text: string) => rpc('agent.prompt', { target, text }, 20_000),
+  prompt: (target: string, text: string, guard?: () => string | undefined) => rpc('agent.prompt', { target, text }, 20_000, socketPath(), guard),
   sendKeys: (target: string, keys: string[]) => rpc('agent.send_keys', { target, keys }),
   paneKeys: (pane_id: string, keys: string[]) => rpc('pane.send_keys', { pane_id, keys }),
   paneText: (pane_id: string, text: string) => rpc('pane.send_text', { pane_id, text }),

@@ -9,7 +9,8 @@ from worktree; Browser from browser). A plugin has a `client.tsx` (screen parts 
 
 Your own plugins live outside the repo, on the main machine, in `~/.shepherdr/plugins/<name>/` (under
 `SHEPHERDR_HOME`), the same shape as a base plugin. Updates never touch that folder, and every release takes them in:
-save a file there and Shepherdr rebuilds and restarts within seconds; open screens reload themselves.
+save a file there and Shepherdr rebuilds and restarts within seconds; open screens reload themselves. The document
+viewer is one of these: [docs/preview.md](preview.md) describes the reader behind it.
 
 - **Add one**: a new folder with a `client.tsx` (and a `server.ts` if you like). Its name: lowercase letters, digits
   and dashes, the same as `name` in its `definePlugin`.

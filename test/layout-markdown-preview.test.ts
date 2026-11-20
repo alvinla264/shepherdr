@@ -1,11 +1,13 @@
-// Requires the private markdown-preview plugin staged in user-plugins before the screen is built.
+// The panel is the human's own markdown-preview plugin, staged into user-plugins/ for the build: it is not repo content,
+// so on a clean checkout there is no panel to open and these skip.
 // Authored only: never run browser tests on the live Herdr machine.
 import { describe, expect, test } from 'bun:test'
 import { layout } from './layout.ts'
+import { hasViewerPlugin } from './viewer-plugin.ts'
 
 const { browser, server } = await layout()
 
-describe.skipIf(!browser)('Markdown side preview', () => {
+describe.skipIf(!browser || !hasViewerPlugin)('Markdown side preview', () => {
   test('opens beside chat, renders safely, follows relative links, and closes without a new page', async () => {
     const page = await browser!.newPage({ viewport: { width: 1800, height: 1000 } })
     const origin = `http://127.0.0.1:${server!.port}`

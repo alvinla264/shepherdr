@@ -13,7 +13,7 @@ import { dirname, join, relative } from 'node:path'
 import { Emitter } from '../source.ts'
 import { readJson, writeJson } from '../store.ts'
 import type { AgentRuntime, TermScreen } from '../../shared/types.ts'
-import { herdr, Subscription, type AgentInfo, type AgentStatus, type HerdrError, type HerdrEvent } from './herdr.ts'
+import { herdr, HerdrError, Subscription, type AgentInfo, type AgentStatus, type HerdrEvent } from './herdr.ts'
 import { ClaudeSessions, Reviewers, screenBackground, sessionBackground, type Background } from './readers/background.ts'
 import { claudeHome, claudeLogPath, findClaudeLog, findCodexLog, findLog, findPiLog, logKind, mainCodexLog } from './readers/find.ts'
 import { effortFor, modelArg } from './models.ts'
@@ -150,6 +150,8 @@ export interface OutItem {
   idle?: boolean
   /** a slash command you typed: Shepherdr follows what it does (commands.ts) */
   command?: boolean
+  /** an automatic continuation: revalidated when its turn to deliver comes, never kept for later */
+  conditional?: true
 }
 
 /** what starts an agent: its record, the first thing it is told, and where its pane comes from when it isn't its
@@ -251,6 +253,14 @@ export class Agents extends Emitter<Events> {
   /** agents being stopped for a restart: what you send waits for the one it starts */
   private stopping = new Set<string>()
   private delivering = new Set<string>()
+  /** the question an automatic continuation asks again at delivery, and why it was dropped (in memory only) */
+  private conditionalChecks = new Map<string, () => string | undefined>()
+  private conditionalSkips = new Map<string, string>()
+  /** a continuation whose hand-over has already begun: it cannot be cancelled any more, only delivered or failed */
+  private conditionalInflight = new Set<string>()
+  private conditionalDelivered = new Set<string>()
+  /** sends in progress per agent: a continuation must not slip in front of one that has not reached the outbox yet */
+  private sending = new Map<string, number>()
   /** what went in lately with a screen's id: the chat gives the id back once it reads the message from the log */
   private delivered: OutItem[] = []
   /** Durable internal news receipts, unlike the screen's short-lived send history. */
@@ -348,7 +358,8 @@ export class Agents extends Emitter<Events> {
 
   save() {
     writeJson('agents.json', this.records)
-    writeJson('outbox.json', this.outbox)
+    // an automatic continuation is revalidated in memory: it must not survive a restart as a blind message
+    writeJson('outbox.json', this.outbox.filter((o) => !o.conditional))
   }
 
   record(key: string) {
@@ -1014,6 +1025,29 @@ export class Agents extends Emitter<Events> {
    *  What a screen sent (with its id) waits only that long: when the agent can't take it or won't start, the screen hears
    *  so and offers Retry. */
   send(key: string, text: string, o: SendOpts = {}): Promise<Sent> {
+    const counted = this.countSending(key)
+    return counted(() => this.sendUncounted(key, text, o))
+  }
+
+  /** while this runs, an automatic continuation for the same agent waits: the input is on its way */
+  private countSending(key: string) {
+    this.sending.set(key, (this.sending.get(key) ?? 0) + 1)
+    let done = false
+    return async <T>(run: () => Promise<T>): Promise<T> => {
+      try {
+        return await run()
+      } finally {
+        if (!done) {
+          done = true
+          const n = (this.sending.get(key) ?? 1) - 1
+          if (n > 0) this.sending.set(key, n)
+          else this.sending.delete(key)
+        }
+      }
+    }
+  }
+
+  private sendUncounted(key: string, text: string, o: SendOpts): Promise<Sent> {
     const cid = o.cid
     if (!cid) return this.sendNow(key, text, o)
     // the screen sends again what it heard no answer for, maybe while the first is still on its way: once is enough
@@ -1024,31 +1058,63 @@ export class Agents extends Emitter<Events> {
     return p
   }
 
-  /** Conditional supervision only. Never starts an agent, waits in an outbox, or changes ordinary send(). */
+  /** Conditional supervision only. Never starts an agent, never queues for later, and never changes ordinary send().
+   *  The continuation waits its turn in this agent's own delivery queue and is revalidated there, synchronously, with
+   *  nothing left to await before the text is handed to herdr: a human message or a resumed agent that arrives first
+   *  cancels it. herdr's connection and the agent reading the text are outside this check; Pi revalidates the envelope
+   *  when it reads it, which is the only check a receiver can make for itself. */
   async nudge(key: string, text: string, check: () => string | undefined): Promise<{ skipped?: string }> {
     const initialPi = this.piJobs(key)
     const expectedPiToken = initialPi && piJobToken(initialPi)
     await this.beforeInput?.(key)
     await this.refresh()
-    const skipped = check()
-    if (skipped) return { skipped }
-    if (this.holdOf(key) || this.outbox.some((o) => o.key === key)) return { skipped: 'input is held or already queued' }
+    const early = check()
+    if (early) return { skipped: early }
     const pi = this.piJobs(key)
     if (this.records[key]?.kind === 'pi' && !pi) return { skipped: 'Pi background state is unknown or stale; inspect before intervening' }
     if (pi && piJobToken(pi) !== expectedPiToken) return { skipped: 'Pi activity changed during delivery preparation' }
     if (pi && (pi.phase !== 'idle' || piJobWaiting(pi))) return { skipped: 'Pi is active or waiting for its own notification' }
-    // Keep the inspected token, never upgrade a stale decision to a newer token.
-    const payload = pi ? `[[shepherdr-auto-nudge:${expectedPiToken}]]\n${text}` : text
-    try {
-      await herdr.prompt(this.records[key].name, payload)
-    } catch (e) {
-      if (holdFrom(e)) return { skipped: 'agent became unavailable; the nudge was not queued' }
-      throw e
+    // The same question, asked again where nothing can slip in between it and the hand-over. `own` is this very item:
+    // it sits in the outbox until it is delivered, so anything else for this agent is what actually blocks it.
+    const guard = (own: string) => {
+      const why = check()
+      if (why) return why
+      if (this.holdOf(key)) return 'input is held or the agent is busy'
+      if (this.sending.has(key)) return 'a message is being sent for this agent'
+      if (this.outbox.some((o) => o.key === key && o.id !== own)) return 'input is already queued'
+      const now = this.piJobs(key)
+      if (this.records[key]?.kind === 'pi' && !now) return 'Pi background state is unknown or stale; inspect before intervening'
+      // Keep the inspected token, never upgrade a stale decision to a newer one.
+      if (now && piJobToken(now) !== expectedPiToken) return 'Pi activity changed during delivery preparation'
+      if (now && (now.phase !== 'idle' || piJobWaiting(now))) return 'Pi is active or waiting for its own notification'
+      return undefined
     }
-    const item: OutItem = { id: randomUUID(), key, text, at: Date.now() }
-    this.went(item)
-    this.emit('sent', item)
-    return {}
+    const item: OutItem = { id: randomUUID(), key, text: pi ? `[[shepherdr-auto-nudge:${expectedPiToken}]]\n${text}` : text, at: Date.now(), conditional: true }
+    this.conditionalChecks.set(item.id, () => guard(item.id))
+    this.outbox.push(item)
+    try {
+      await this.deliver(key)
+      const why = this.conditionalSkips.get(item.id)
+      if (why) return { skipped: why }
+      // handed over: the text is on its way, so this is not a skip and not a promise that Pi accepted it
+      if (this.conditionalDelivered.has(item.id)) return {}
+      return { skipped: 'the agent is busy or unavailable; the nudge was not queued' }
+    } finally {
+      this.conditionalChecks.delete(item.id)
+      this.conditionalSkips.delete(item.id)
+      this.conditionalInflight.delete(item.id)
+      this.conditionalDelivered.delete(item.id)
+      this.outbox = this.outbox.filter((o) => o !== item)
+      this.save()
+    }
+  }
+
+  /** a queued automatic continuation is dropped, never retried, the moment its own state changed */
+  private conditionalVerdict(key: string, item: OutItem): string | undefined {
+    const guard = this.conditionalChecks.get(item.id)
+    if (!guard) return 'this automatic continuation expired'
+    if (this.heldBy(key, item)) return 'input is held or the agent is busy'
+    return guard()
   }
 
    private async sendNow(key: string, text: string, { reaction, ensure, cid, idle, command, generation }: SendOpts): Promise<Sent> {
@@ -1059,6 +1125,14 @@ export class Agents extends Emitter<Events> {
     if (done) return { waiting: false, item: done }
     // sent again after it failed: it is on its way once more
     if (cid) this.failures = this.failures.filter((f) => f.cid !== cid)
+    // a human message supersedes an automatic continuation still waiting for this agent; one already being handed
+    // over cannot be taken back, and the human message then follows it
+    const conditional = this.outbox.filter((o) => o.key === key && o.conditional && !this.conditionalInflight.has(o.id))
+    if (conditional.length) {
+      for (const o of conditional) this.conditionalSkips.set(o.id, 'a human message was sent for this agent')
+      this.outbox = this.outbox.filter((o) => !o.conditional || o.key !== key)
+      this.save()
+    }
     const item: OutItem = { generation, id: randomUUID(), key, text, reaction, at: Date.now(), ...(cid ? { cid } : {}), ...(idle ? { idle } : {}), ...(command ? { command } : {}) }
     if (item.launch && item.launch !== this.records[key]?.launch || this.acceptInput && !this.acceptInput(item)) return { waiting: false, item }
     if (this.status(key) === 'gone' && ensure && cid && !this.deliveryPaused.has(key)) {
@@ -1099,8 +1173,8 @@ export class Agents extends Emitter<Events> {
   /** one thing into the CLI. A slash command is checked: a CLI may take its Enter for a pick in the list of commands
    *  it shows as you type, so while it still sits in the input, Enter goes again; one that never runs is wiped from
    *  the input and fails, so the chat says so instead of waiting on it. */
-  private async put(key: string, item: OutItem) {
-    await herdr.prompt(this.records[key].name, item.text)
+  private async put(key: string, item: OutItem, guard?: () => string | undefined) {
+    await herdr.prompt(this.records[key].name, item.text, guard)
     const pane = item.command && this.info(key)?.pane_id
     if (!pane) return
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -1133,16 +1207,61 @@ export class Agents extends Emitter<Events> {
       for (;;) {
         const next = this.outbox.find((o) => o.key === key)
         if (!next) return void this.unready.delete(key)
-        if (next.launch && next.launch !== this.records[key]?.launch || this.acceptInput && !this.acceptInput(next)) { this.outbox = this.outbox.filter((o) => o !== next); this.save(); continue }
+        if (next.launch && next.launch !== this.records[key]?.launch || this.acceptInput && !this.acceptInput(next)) {
+          if (next.conditional) this.conditionalSkips.set(next.id, 'this automatic continuation expired')
+          this.outbox = this.outbox.filter((o) => o !== next)
+          this.save()
+          continue
+        }
         if (next.cid?.startsWith('requested-news:') && this.newsReceipts.includes(next.cid)) {
           this.outbox = this.outbox.filter((o) => o !== next)
           this.save()
           continue
         }
         await this.beforeInput?.(key)
-        if (next.launch && next.launch !== this.records[key]?.launch || this.acceptInput && !this.acceptInput(next)) { this.outbox = this.outbox.filter((o) => o !== next); this.save(); continue }
+        // a send from the human may have cancelled it while we waited: it is gone, not delivered
+        if (!this.outbox.includes(next)) continue
+        if (next.launch && next.launch !== this.records[key]?.launch || this.acceptInput && !this.acceptInput(next)) {
+          if (next.conditional) this.conditionalSkips.set(next.id, 'this automatic continuation expired')
+          this.outbox = this.outbox.filter((o) => o !== next)
+          this.save()
+          continue
+        }
+        // Here, with nothing left to await, an automatic continuation is judged for the last time before it is handed
+        // to herdr. herdr's own connection and the agent reading the text are outside what a sender can revalidate.
+        if (next.conditional) {
+          const why = this.conditionalVerdict(key, next)
+          if (why) {
+            this.conditionalSkips.set(next.id, why)
+            this.outbox = this.outbox.filter((o) => o !== next)
+            this.save()
+            continue
+          }
+        }
         if (this.heldBy(key, next)) return
-        await this.put(key, next)
+        if (next.conditional) this.conditionalInflight.add(next.id)
+        try {
+          // judged once more in herdr's own connect handler, immediately before the bytes are written
+          await this.put(key, next, next.conditional ? () => this.conditionalVerdict(key, next!) : undefined)
+        } catch (e) {
+          this.conditionalInflight.delete(next.id)
+          if (next.conditional) {
+            // its own failure, told as a skip: the agent's readiness is left as herdr reports it, and nothing queued
+            // behind it is failed on its account
+            this.unready.delete(key)
+            const hold = holdFrom(e)
+            this.conditionalSkips.set(next.id, e instanceof HerdrError && e.code === 'refused' ? e.message
+              : hold ? 'the agent could not take it; the nudge was not queued'
+              : `the nudge could not be sent: ${(e as Error).message}`)
+            this.outbox = this.outbox.filter((o) => o !== next)
+            this.save()
+            continue
+          }
+          throw e
+        } finally {
+          this.conditionalInflight.delete(next.id)
+        }
+        if (next.conditional) this.conditionalDelivered.add(next.id)
         this.unready.delete(key)
         this.went(next)
         this.outbox = this.outbox.filter((o) => o !== next)
