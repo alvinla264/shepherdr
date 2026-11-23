@@ -1923,7 +1923,7 @@ describe('a turn the provider cut off, end to end', () => {
         log.cut()
         src.agents.emit('status', key, 'idle')
         // a cut-off is decided once its log is read to its end, on the turn after the status change
-        await Bun.sleep(80)
+        await until(() => src.retries.get(key)?.tries === i, 3000)
         expect(src.retries.get(key)?.tries).toBe(i)
         if (i === 5) break
         // told to carry on once its wait is over; the line it is told is no message of yours: the count goes on
@@ -1960,7 +1960,7 @@ describe('a turn the provider cut off, end to end', () => {
       log.cut()
       src.agents.emit('status', key, 'idle')
       // a cut-off is decided once its log is read to its end, on the turn after the status change
-      await Bun.sleep(80)
+      await until(() => src.retries.get(key) !== undefined, 3000)
       expect(src.retries.get(key)?.due).toBeGreaterThan(0)
       await src.engine.stopTask(t.id)
       // stopping it clears the wait; one seen again after that is let be when it is due
