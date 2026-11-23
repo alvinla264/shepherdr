@@ -312,6 +312,8 @@ export class Chats {
   private where = new Map<string, Map<string, number>>()
   /** what was read of each log: inode, size and modification time, so an end check knows it is looking at that file */
   private logStats = new Map<string, { ino: number; size: number; mtime: number }>()
+  /** the last of a chat's logs that gave it events: a log before it with new lines has to be read again in order */
+  private lastLog = new Map<string, number>()
   /** chats whose logs are still being read in the background */
   private reading = new Set<string>()
   /** chats waiting for one of those places */
@@ -464,14 +466,16 @@ export class Chats {
       const ev = t.read(left)
       left -= Math.max(0, t.done - was)
       // new lines in a log that is not the last, while later logs are already read: these must not land after them
-      if (inOrder && ev.length && i < logs.length - 1) return { changed, behind: true, startedOver: true }
+      if (inOrder && ev.length && (this.lastLog.get(key) ?? -1) > i) return { changed, behind: true, startedOver: true }
       // what was read is only that file's end if the file did not change under the read
       const after = this.statOf(f)
       if (!after || !now || after.ino !== now.ino || after.size !== now.size || after.mtime !== now.mtime) {
-        this.logStats.delete(f)
+        // it changed while it was read: what came in then was not taken, so the chat reads its logs again from the start
+        this.startOver(key, logs)
         return { changed, behind: true }
       }
       this.logStats.set(f, after)
+      if (ev.length) this.lastLog.set(key, i)
       for (const e of ev) {
         if (privateHome && e.kind === 'job') {
           const mapped = (path?: string) => path ? privateRuntimePath(privateHome, capturedTranscript(privateHome, r.kind, relative(homedir(), path))) : undefined
@@ -689,6 +693,7 @@ export class Chats {
   private startOver(key: string, logs: string[]) {
     this.events.set(key, [])
     this.where.delete(key)
+    this.lastLog.delete(key)
     for (const f of logs) {
       this.tails.delete(f)
       this.logStats.delete(f)

@@ -1384,8 +1384,8 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     if (!decision.decided) {
       this.cutUndetermined.add(key)
       if (!this.cutRetry.has(key)) {
-        // left undetermined rather than decided from a part: looked at again a few times, further apart each time, and
-        // then left alone until something happens to that chat again (a status change re-arms it)
+        // left undetermined rather than decided from a part: looked at again after 2, 5, 15 and 30 seconds and then every
+        // 30 seconds, so a chat whose logs keep it undecided is never decided wrongly and never forgotten
         const tries = this.cutTries.get(key) ?? 0
         this.cutTries.set(key, tries + 1)
         this.cutRetry.add(key)
