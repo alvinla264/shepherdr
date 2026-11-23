@@ -702,7 +702,8 @@ export class Chats {
   }
 
   private atEnd(key: string): boolean {
-    if (this.reading.has(key) || this.readQueued.has(key)) return false
+    // a background pass being in flight says nothing about the file: what was read is at the end when the file is still
+    // the very one read (inode, size, modification time), which a pass in flight cannot hide
     const logs = this.agents.record(key)?.logs ?? []
     // no log it knows of: nothing is established about what cut a turn off
     if (!logs.length) return false
