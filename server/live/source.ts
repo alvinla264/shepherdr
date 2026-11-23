@@ -197,14 +197,13 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       this.revivals.status(key, st)
       this.engine.agentStatus(key)
       this.fresh(key)
-      // its turn ended: maybe its provider cut it off (its log may say so a moment later)
-      if (st !== 'working' && st !== 'blocked') {
-        this.checkCut(key)
-        setTimeout(() => this.checkCut(key), 2000)
-        this.reseat(key)
-      }
+      // its turn ended: maybe its provider cut it off (its log may say so a moment later). Read a chat's logs for one
+      // chat per turn: a restart reports every agent at once, and pulling all of their logs inside that loop would hold
+      // the server that answers the app for minutes (a long-lived coordinator's log is tens of MB).
+      // a menu shows as blocked: its screen is read now, as it was before
+      if (st === 'blocked') this.chats.readMenu(key).then(() => this.watched.includes(key) && this.emit('chat', key)).catch(() => undefined)
+      else if (st !== 'working') this.cutSoon(key)
       this.emit('snapshot')
-      this.chats.readMenu(key).then(() => this.emit('chat', key)).catch(() => {})
     })
     this.agents.on('logs', (key) => this.watched.includes(key) && this.emit('chat', key))
     this.agents.on('sent', (item) => {
@@ -1315,6 +1314,28 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
   /** what cut off an agent's last turn, if its log says the provider did */
   private checkCut(key: string) {
     if (this.agents.record(key) && !this.peers?.owner(key)) this.retries.seen(key, this.chats.cutOff(key))
+  }
+
+  /** What a status change reads of a chat's logs and screen, one chat at a time with a turn in between. */
+  private cutQueue = new Set<string>()
+  private cutTimer: ReturnType<typeof setTimeout> | null = null
+
+  private cutSoon(key: string) {
+    this.cutQueue.add(key)
+    if (!this.cutTimer) this.cutTimer = setTimeout(() => this.cutNext(), 0)
+  }
+
+  private cutNext() {
+    this.cutTimer = null
+    const next = this.cutQueue.values().next().value as string | undefined
+    if (next === undefined) return
+    this.cutQueue.delete(next)
+    this.checkCut(next)
+    this.reseat(next)
+    // its log may say so a moment later
+    setTimeout(() => this.checkCut(next), 2000)
+    this.chats.readMenu(next).then(() => this.emit('chat', next)).catch(() => undefined)
+    if (this.cutQueue.size) this.cutTimer = setTimeout(() => this.cutNext(), 20)
   }
 
   /** an agent can't go on by itself: a task's backup agent takes over, or it waits for you; a coordinator tells you in

@@ -294,8 +294,10 @@ export function sawReply(s: Pick<Shown, 'last' | 'on'>, text: string | undefined
 }
 
 /** how much of a chat's logs one pull reads: the rest is read in the background a piece at a time, so a log of a
- *  hundred MB (a long-lived coordinator's) never holds up the server, at a restart or as it grows */
-const PIECE = 2 << 20
+ *  hundred MB (a long-lived coordinator's) never holds up the server, at a restart or as it grows. Small enough that
+ *  parsing one piece is a few tens of milliseconds: a restart that reports a hundred agents at once pulls a chat's
+ *  logs for each of them, and the turn that answers the app must come back between those pulls. */
+const PIECE = 256 << 10
 
 export class Chats {
   private tails = new Map<string, LogTail>()
@@ -456,7 +458,8 @@ export class Chats {
     this.reading.add(key)
     const step = () => {
       if (!this.reading.has(key)) return
-      if (this.read(key).behind) return void setTimeout(step, 0)
+      // a turn of its own between pieces: the app's requests, and everyone else's, go in between them
+      if (this.read(key).behind) return void setTimeout(step, 15)
       this.reading.delete(key)
       this.onRead?.(key)
     }
