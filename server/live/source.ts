@@ -774,6 +774,8 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       // what runs in the background shows live too, though its agent writes nothing meanwhile
       const jobs = this.chats.jobsChanged(k)
       if (pulled || menu || reply || jobs) this.emit('chat', k)
+      // its log gained lines: a cut-off may have landed after the turn was checked, and this reads it once it is at its end
+      if (pulled && !['working', 'blocked'].includes(this.agents.status(k))) this.cutSoon(k)
       // a turn for the app between agents: reading a log is synchronous, and with no herdr call in this loop the whole
       // sweep would otherwise be one long block that the app's requests queue behind
       await new Promise((r) => setTimeout(r, 0))

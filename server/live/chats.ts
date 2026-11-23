@@ -420,14 +420,15 @@ export class Chats {
   private read(key: string): { changed: boolean; behind: boolean } {
     const r = this.agents.record(key)
     if (!r) return { changed: false, behind: false }
-    // a log that was replaced or rewritten makes the chat start over: read again from its first log, in its own order
-    const first = this.readLogs(key, r.logs)
+    // a chat's events are its logs in order: a log replaced or rewritten, or one whose new lines would land after lines
+    // of a later log already read, makes it read all of them again from the first, in order
+    const first = this.readLogs(key, r.logs, true)
     if (!first.startedOver) return first
     this.startOver(key, r.logs)
-    return this.readLogs(key, r.logs)
+    return this.readLogs(key, r.logs, false)
   }
 
-  private readLogs(key: string, logs: string[]): { changed: boolean; behind: boolean; startedOver?: boolean } {
+  private readLogs(key: string, logs: string[], inOrder: boolean): { changed: boolean; behind: boolean; startedOver?: boolean } {
     const r = this.agents.record(key)
     if (!r) return { changed: false, behind: false }
     let changed = false
@@ -435,7 +436,7 @@ export class Chats {
     let left = PIECE
     const all = this.events.get(key) ?? []
     const where = this.where.get(key) ?? new Map<string, number>()
-    for (const f of logs) {
+    for (const [i, f] of logs.entries()) {
       if (!existsSync(f)) continue
       const privateHome = f.match(/^(.*\/autopilot-runtime\/[^/]+\/[^/]+\/captures)\//)?.[1]
       if (privateHome && !privateRuntimePath(privateHome, f)) continue
@@ -462,12 +463,15 @@ export class Chats {
       const was = t.done
       const ev = t.read(left)
       left -= Math.max(0, t.done - was)
-      try {
-        const st = statSync(f)
-        this.logStats.set(f, { ino: st.ino, size: st.size, mtime: st.mtimeMs })
-      } catch {
+      // new lines in a log that is not the last, while later logs are already read: these must not land after them
+      if (inOrder && ev.length && i < logs.length - 1) return { changed, behind: true, startedOver: true }
+      // what was read is only that file's end if the file did not change under the read
+      const after = this.statOf(f)
+      if (!after || !now || after.ino !== now.ino || after.size !== now.size || after.mtime !== now.mtime) {
         this.logStats.delete(f)
+        return { changed, behind: true }
       }
+      this.logStats.set(f, after)
       for (const e of ev) {
         if (privateHome && e.kind === 'job') {
           const mapped = (path?: string) => path ? privateRuntimePath(privateHome, capturedTranscript(privateHome, r.kind, relative(homedir(), path))) : undefined
@@ -671,12 +675,13 @@ export class Chats {
     return { id: e.id, at: e.at, text: e.text, code: e.code, status: e.status }
   }
 
-  /** the inode at that path now, or -1 when it cannot be read */
-  private inoNow(file: string): number {
+  /** inode, size and modification time at that path now: -1s when it cannot be read */
+  private statOf(file: string): { ino: number; size: number; mtime: number } | undefined {
     try {
-      return statSync(file).ino
+      const st = statSync(file)
+      return { ino: st.ino, size: st.size, mtime: st.mtimeMs }
     } catch {
-      return -1
+      return undefined
     }
   }
 
@@ -716,7 +721,8 @@ export class Chats {
       // never opened, unreadable, still short, or ending in half a line: its end is not established
       if (!t || !was || !t.atEnd) return false
       // something came after the read, or the file at that path is not the one read: what it shows is not all there is
-      if (t.position !== now.size || was.ino !== now.ino || was.size !== now.size || was.mtime !== now.mtime) return false
+      if (t.readIno !== now.ino || t.position !== now.size) return false
+      if (was.ino !== now.ino || was.size !== now.size || was.mtime !== now.mtime) return false
     }
     return true
   }
