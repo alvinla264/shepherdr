@@ -58,17 +58,34 @@ export class LogTail {
     return this.more
   }
 
+  /** how far it has read, and which file: compared with the file now, they say whether what it read is that file's end */
+  get position(): number {
+    return this.pos
+  }
+
+  get readIno(): number {
+    return this.ino
+  }
+
+  /** nothing is known about this file's end: it could not be opened or measured, or it ends in half a line */
+  private failed = false
+  get atEnd(): boolean {
+    return !this.more && !this.failed && this.carry.length === 0
+  }
+
   /** events of the complete lines written since the last read, or of about `max` bytes more of the file (a line it
    *  ends in the middle of is kept, and comes whole from a later read); starts over when the file shrank or was
    *  replaced */
   read(max = Infinity): LogEvent[] {
     let size: number
     this.more = false
+    this.failed = false
     try {
       const st = statSync(this.file)
       if (st.ino !== this.ino || st.size < this.pos) this.restart(st.ino)
       size = st.size
     } catch {
+      this.failed = true
       return []
     }
     if (size <= this.pos) return []
@@ -78,6 +95,7 @@ export class LogTail {
     try {
       fd = openSync(this.file, 'r')
     } catch {
+      this.failed = true
       return []
     }
     try {

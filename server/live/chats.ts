@@ -1,7 +1,7 @@
 // Chats: one chat per agent across all its sessions, read from the CLI's own log files, plus what Shepherdr itself
 // posts (update cards, choice cards, plans, artifacts, merge cards) kept in its own small log per chat.
 import { createHash } from 'node:crypto'
-import { existsSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, openSync, rmSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { apart, cardMessage, type ActivityAnswer, type ActivityAsk, type Chat, type ChatControls, type ArtifactPost, type Job, type Message, type Question, type Reaction, type SecretAsk, type UpdateCard } from '../../shared/types.ts'
 import { HOME, readJson, writeJson } from '../store.ts'
@@ -299,13 +299,23 @@ export function sawReply(s: Pick<Shown, 'last' | 'on'>, text: string | undefined
  *  logs for each of them, and the turn that answers the app must come back between those pulls. */
 const PIECE = 256 << 10
 
+/** how many chats' logs are read in the background at once */
+const READING_AT_ONCE = 2
+
+/** how many pieces one chat reads before giving its place up: a log that keeps growing cannot hold a place */
+const READING_TURN_PIECES = 16
+
 export class Chats {
   private tails = new Map<string, LogTail>()
   private events = new Map<string, LogEvent[]>()
   /** where each reply and usage is in its chat's events, by kind and id: a reply read in two pieces replaces the first */
   private where = new Map<string, Map<string, number>>()
+  /** what was read of each log: inode, size and modification time, so an end check knows it is looking at that file */
+  private logStats = new Map<string, { ino: number; size: number; mtime: number }>()
   /** chats whose logs are still being read in the background */
   private reading = new Set<string>()
+  /** chats waiting for one of those places */
+  private readQueued = new Set<string>()
   /** a chat's logs were read in the background to their end: what it shows changed */
   onRead?: (key: string) => void
   private logs = new Map<string, ChatLog>()
@@ -339,7 +349,7 @@ export class Chats {
 
   /** a deleted task's chat: its log goes, and all that was read of it */
   forget(key: string) {
-    for (const m of [this.tails, this.events, this.where, this.reading, this.logs, this.menus, this.menuAt, this.shown]) m.delete(key)
+    for (const m of [this.tails, this.events, this.where, this.reading, this.readQueued, this.logs, this.menus, this.menuAt, this.shown]) m.delete(key)
     rmSync(join(HOME, 'chatlog', `${safe(key)}.json`), { force: true })
   }
 
@@ -410,16 +420,38 @@ export class Chats {
   private read(key: string): { changed: boolean; behind: boolean } {
     const r = this.agents.record(key)
     if (!r) return { changed: false, behind: false }
+    // a log that was replaced or rewritten makes the chat start over: read again from its first log, in its own order
+    const first = this.readLogs(key, r.logs)
+    if (!first.startedOver) return first
+    this.startOver(key, r.logs)
+    return this.readLogs(key, r.logs)
+  }
+
+  private readLogs(key: string, logs: string[]): { changed: boolean; behind: boolean; startedOver?: boolean } {
+    const r = this.agents.record(key)
+    if (!r) return { changed: false, behind: false }
     let changed = false
     let behind = false
     let left = PIECE
     const all = this.events.get(key) ?? []
     const where = this.where.get(key) ?? new Map<string, number>()
-    for (const f of r.logs) {
+    for (const f of logs) {
       if (!existsSync(f)) continue
       const privateHome = f.match(/^(.*\/autopilot-runtime\/[^/]+\/[^/]+\/captures)\//)?.[1]
       if (privateHome && !privateRuntimePath(privateHome, f)) continue
       let t = this.tails.get(f)
+      const was_ = this.logStats.get(f)
+      let now: { ino: number; size: number; mtime: number } | undefined
+      try {
+        const st = statSync(f)
+        now = { ino: st.ino, size: st.size, mtime: st.mtimeMs }
+      } catch {
+        now = undefined
+      }
+      // replaced, shrunk, or rewritten in place to the same length since it was read: it has to be read again
+      if (t && now && (t.readIno !== now.ino || now.size < t.position || (was_ && was_.size === now.size && was_.mtime !== now.mtime))) {
+        return { changed, behind: true, startedOver: true }
+      }
       if (!t) {
         // each by its own CLI's reader: a backup agent's logs follow the first one's
         const reader = readerFor(logKind(f) ?? r.kind)
@@ -430,6 +462,12 @@ export class Chats {
       const was = t.done
       const ev = t.read(left)
       left -= Math.max(0, t.done - was)
+      try {
+        const st = statSync(f)
+        this.logStats.set(f, { ino: st.ino, size: st.size, mtime: st.mtimeMs })
+      } catch {
+        this.logStats.delete(f)
+      }
       for (const e of ev) {
         if (privateHome && e.kind === 'job') {
           const mapped = (path?: string) => path ? privateRuntimePath(privateHome, capturedTranscript(privateHome, r.kind, relative(homedir(), path))) : undefined
@@ -454,16 +492,36 @@ export class Chats {
 
   /** reads the rest of a chat's logs a piece at a time, letting the server answer between pieces; told once at the end */
   private readOn(key: string) {
-    if (this.reading.has(key)) return
-    this.reading.add(key)
-    const step = () => {
-      if (!this.reading.has(key)) return
-      // a turn of its own between pieces: the app's requests, and everyone else's, go in between them
-      if (this.read(key).behind) return void setTimeout(step, 15)
-      this.reading.delete(key)
-      this.onRead?.(key)
+    if (this.reading.has(key) || this.readQueued.has(key)) return
+    this.readQueued.add(key)
+    this.pumpReading()
+  }
+
+  /** a few chats read at a time, each giving its place up in turn: a hundred behind at a restart must not all read at
+   *  once, and one log that keeps growing must not keep the places from the others */
+  private pumpReading() {
+    while (this.reading.size < READING_AT_ONCE && this.readQueued.size) {
+      const key = this.readQueued.values().next().value as string
+      this.readQueued.delete(key)
+      this.reading.add(key)
+      let pieces = 0
+      const step = () => {
+        if (!this.reading.has(key)) return this.pumpReading()
+        // a turn of its own between pieces: the app's requests, and everyone else's, go in between them
+        const behind = this.read(key).behind
+        if (behind && ++pieces < READING_TURN_PIECES) return void setTimeout(step, 15)
+        this.reading.delete(key)
+        if (behind) this.readQueued.add(key)
+        else this.onRead?.(key)
+        this.pumpReading()
+      }
+      setTimeout(step, 0)
     }
-    setTimeout(step, 0)
+  }
+
+  /** the chats whose logs are being read in the background and those waiting for a place: told for diagnosis and tests */
+  backgroundReads(): { reading: string[]; queued: string[] } {
+    return { reading: [...this.reading], queued: [...this.readQueued] }
   }
 
   /** tokens this chat's agent has used, across all its sessions */
@@ -603,10 +661,72 @@ export class Chats {
    *  started (started again, or a backup agent that took over, whose own log has nothing yet) */
   cutOff(key: string): Cut | undefined {
     this.pull(key)
+    return this.cutOffNow(key)
+  }
+
+  private cutOffNow(key: string): Cut | undefined {
     const ev = this.events.get(key) ?? []
     const e = ev.findLast((e) => e.kind === 'error' || e.kind === 'turn-start' || e.kind === 'user')
     if (e?.kind !== 'error' || e.at < (this.agents.record(key)?.started ?? 0)) return undefined
     return { id: e.id, at: e.at, text: e.text, code: e.code, status: e.status }
+  }
+
+  /** the inode at that path now, or -1 when it cannot be read */
+  private inoNow(file: string): number {
+    try {
+      return statSync(file).ino
+    } catch {
+      return -1
+    }
+  }
+
+  /** what was read of a chat's logs is not their history any more: its files are read again from the start */
+  private startOver(key: string, logs: string[]) {
+    this.events.set(key, [])
+    this.where.delete(key)
+    for (const f of logs) {
+      this.tails.delete(f)
+      this.logStats.delete(f)
+    }
+  }
+
+  /** its logs are read to their end: what they show is all there is (a cut-off is only decided then) */
+  upToDate(key: string): boolean {
+    this.pull(key)
+    return this.atEnd(key)
+  }
+
+  private atEnd(key: string): boolean {
+    if (this.reading.has(key) || this.readQueued.has(key)) return false
+    const logs = this.agents.record(key)?.logs ?? []
+    // no log it knows of: nothing is established about what cut a turn off
+    if (!logs.length) return false
+    for (const f of logs) {
+      // a log it knows of that is gone, or cannot be read now, is not the end of anything
+      let now: { ino: number; size: number; mtime: number }
+      try {
+        const st = statSync(f)
+        closeSync(openSync(f, 'r'))
+        now = { ino: st.ino, size: st.size, mtime: st.mtimeMs }
+      } catch {
+        return false
+      }
+      const t = this.tails.get(f)
+      const was = this.logStats.get(f)
+      // never opened, unreadable, still short, or ending in half a line: its end is not established
+      if (!t || !was || !t.atEnd) return false
+      // something came after the read, or the file at that path is not the one read: what it shows is not all there is
+      if (t.position !== now.size || was.ino !== now.ino || was.size !== now.size || was.mtime !== now.mtime) return false
+    }
+    return true
+  }
+
+  /** what cut this chat off, decided only from one read that reached the end of every log it has: a log still being
+   *  read, unreadable, or growing faster than it is read leaves it undecided, and nothing is decided from a part */
+  cutOffIfCaughtUp(key: string): { decided: boolean; cut?: Cut } {
+    this.pull(key)
+    if (!this.atEnd(key)) return { decided: false }
+    return { decided: true, cut: this.cutOffNow(key) }
   }
 
   /** its log shows a turn that ended after this time */

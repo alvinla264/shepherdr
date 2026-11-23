@@ -69,6 +69,22 @@ function userName(): string {
 }
 
 
+/** the chats nobody watches whose screens are read next: a few, in key order from a cursor that wraps, so a changing
+ *  list cannot skip one for good and a hundred agents cost a few herdr calls a second, not a hundred */
+export function screensInTurn(keys: string[], skip: string[], after: string, howMany: number): { turns: string[]; after: string } {
+  const idle = [...new Set(keys)].filter((k) => !skip.includes(k)).sort()
+  if (!idle.length) return { turns: [], after }
+  let at = idle.findIndex((k) => k > after)
+  if (at < 0) at = 0
+  const turns: string[] = []
+  for (let i = 0; i < Math.min(howMany, idle.length); i++) turns.push(idle[(at + i) % idle.length]!)
+  return { turns, after: turns.length ? turns[turns.length - 1]! : after }
+}
+
+/** how long after an undetermined cut-off its log is looked at again, and how many times: a few, waiting longer each
+ *  time, so a chat whose logs never catch up is left undetermined instead of being decided from a part */
+const CUT_RETRY_DELAYS = [2000, 5000, 15000, 30000]
+
 export class LiveSource extends Emitter<SourceEvents> implements Source {
   readonly kind = 'live' as const
   user = userName()
@@ -190,6 +206,8 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     this.chats.onRead = (key) => {
       this.emit('chat', key)
       this.fresh(key)
+      // its log has caught up: a cut-off left undetermined can be decided now
+      if (this.cutUndetermined.has(key) && this.checkCut(key)) this.cutUndetermined.delete(key)
     }
     this.agents.on('routed', (key) => this.engine.routeRecovered(key))
     this.agents.on('status', (key, st) => {
@@ -203,6 +221,8 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       // a menu shows as blocked: its screen is read now, as it was before
       if (st === 'blocked') this.chats.readMenu(key).then(() => this.watched.includes(key) && this.emit('chat', key)).catch(() => undefined)
       else if (st !== 'working') this.cutSoon(key)
+      // working again: its screen is read as before, which is what clears a menu it left behind
+      else this.chats.readMenu(key).catch(() => undefined)
       this.emit('snapshot')
     })
     this.agents.on('logs', (key) => this.watched.includes(key) && this.emit('chat', key))
@@ -713,15 +733,50 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     for (const k of chats) this.agents.discoverLog(k)
   }
 
+  /** screens read each poll among the chats nobody watches: four a second at a hundred agents, not a hundred */
+  private static readonly SCREENS_PER_POLL = 4
+
+  private polling = false
+  /** the chat whose screen was read last among those nobody watches */
+  private screenLast = ''
+
+  private nextScreens(keys: string[], howMany: number): Set<string> {
+    // blocked agents already have their screen read on their status change and every sweep: the turn is for the rest
+    const skip = [...this.watched, ...keys.filter((k) => this.agents.status(k) === 'blocked')]
+    const { turns, after } = screensInTurn(keys, skip, this.screenLast, howMany)
+    this.screenLast = after
+    return new Set(turns)
+  }
+
   private async pollChats() {
-    for (const k of new Set([...this.watched, ...Object.keys(this.agents.records).filter((k) => !['gone', 'working'].includes(this.agents.status(k)))])) {
+    if (this.polling) return
+    this.polling = true
+    try {
+      await this.pollChatsOnce()
+    } finally {
+      this.polling = false
+    }
+  }
+
+  private async pollChatsOnce() {
+    const keys = [...new Set([...this.watched, ...Object.keys(this.agents.records).filter((k) => !['gone', 'working'].includes(this.agents.status(k)))])]
+    // every second was a screen read per agent: the chats on screen are read every second as before, the others a few at
+    // a time in turn, so no menu waits long and a hundred agents do not cost a hundred herdr calls a second
+    const turns = this.nextScreens(keys, LiveSource.SCREENS_PER_POLL)
+    for (const k of keys) {
       // pull first: the reply's read goes by the turn the log shows now
       const pulled = this.chats.pull(k)
-      const menu = await this.chats.readMenu(k).catch(() => false)
+      // the chats on screen are read every second, the others one at a time in turn: no menu is never read, and a
+      // hundred agents are not a hundred herdr calls a second
+      const looking = this.watched.includes(k) || this.agents.status(k) === 'blocked' || turns.has(k)
+      const menu = looking ? await this.chats.readMenu(k).catch(() => false) : false
       const reply = await this.chats.readReply(k).catch(() => false)
       // what runs in the background shows live too, though its agent writes nothing meanwhile
       const jobs = this.chats.jobsChanged(k)
       if (pulled || menu || reply || jobs) this.emit('chat', k)
+      // a turn for the app between agents: reading a log is synchronous, and with no herdr call in this loop the whole
+      // sweep would otherwise be one long block that the app's requests queue behind
+      await new Promise((r) => setTimeout(r, 0))
     }
     // replies a voice call reads out
     for (const [k, fns] of this.replyFns) {
@@ -1311,9 +1366,37 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     this.alert({ id: randomUUID(), from: 'Shepherdr', title: `${this.chatName(key)} stopped`, body: `Its agent ${what}, and Shepherdr couldn't start it again.`, go: { place: key, focus: id }, tag: `revive:${key}` })
   }
 
-  /** what cut off an agent's last turn, if its log says the provider did */
-  private checkCut(key: string) {
-    if (this.agents.record(key) && !this.peers?.owner(key)) this.retries.seen(key, this.chats.cutOff(key))
+  /** what cut off an agent's last turn, if its log says the provider did: decided only once that chat's log has caught
+   *  up. A log still being read, or growing faster than it is read, leaves it undetermined - not a failure - and it is
+   *  looked at again rather than decided from a partial history that may still have the new turn below the error. */
+  private cutUndetermined = new Set<string>()
+  private cutRetry = new Set<string>()
+  private cutTries = new Map<string, number>()
+
+  private checkCut(key: string): boolean {
+    if (!this.agents.record(key) || this.peers?.owner(key)) {
+      this.cutUndetermined.delete(key)
+      return true
+    }
+    const decision = this.chats.cutOffIfCaughtUp(key)
+    if (!decision.decided) {
+      this.cutUndetermined.add(key)
+      if (!this.cutRetry.has(key)) {
+        // left undetermined rather than decided from a part: looked at again a few times, further apart each time, and
+        // then left alone until something happens to that chat again (a status change re-arms it)
+        const tries = this.cutTries.get(key) ?? 0
+        this.cutTries.set(key, tries + 1)
+        this.cutRetry.add(key)
+        setTimeout(() => {
+          this.cutRetry.delete(key)
+          if (this.checkCut(key)) this.cutUndetermined.delete(key)
+        }, CUT_RETRY_DELAYS[Math.min(tries, CUT_RETRY_DELAYS.length - 1)])
+      }
+      return false
+    }
+    this.cutTries.delete(key)
+    this.retries.seen(key, decision.cut)
+    return true
   }
 
   /** What a status change reads of a chat's logs and screen, one chat at a time with a turn in between. */
@@ -1321,6 +1404,8 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
   private cutTimer: ReturnType<typeof setTimeout> | null = null
 
   private cutSoon(key: string) {
+    // something happened to this chat again: its cut-off starts over
+    this.cutTries.delete(key)
     this.cutQueue.add(key)
     if (!this.cutTimer) this.cutTimer = setTimeout(() => this.cutNext(), 0)
   }
@@ -1332,8 +1417,10 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     this.cutQueue.delete(next)
     this.checkCut(next)
     this.reseat(next)
-    // its log may say so a moment later
-    setTimeout(() => this.checkCut(next), 2000)
+    // its log may say so a moment later: decided then, or left undetermined until it has caught up
+    setTimeout(() => {
+      if (this.checkCut(next)) this.cutUndetermined.delete(next)
+    }, 2000)
     this.chats.readMenu(next).then(() => this.emit('chat', next)).catch(() => undefined)
     if (this.cutQueue.size) this.cutTimer = setTimeout(() => this.cutNext(), 20)
   }
