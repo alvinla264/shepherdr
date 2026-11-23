@@ -58,6 +58,20 @@ export class LogTail {
     return this.more
   }
 
+  /** a small sum over the 64 bytes before the read position: if they changed, the file was rewritten under the read */
+  private seal = -1
+  private stampSeal(fd: number): void {
+    if (this.pos < 64) {
+      this.seal = -1
+      return
+    }
+    const buf = Buffer.alloc(64)
+    const got = readSync(fd, buf, 0, 64, this.pos - 64)
+    let h = 0
+    for (let i = 0; i < got; i++) h = (h * 31 + buf[i]!) | 0
+    this.seal = h
+  }
+
   /** how far it has read, and which file: compared with the file now, they say whether what it read is that file's end */
   get position(): number {
     return this.pos
@@ -99,6 +113,14 @@ export class LogTail {
       return []
     }
     try {
+      // the bytes just before where it stands must still be the ones it read: a rewrite that only grows shows here
+      if (this.seal !== -1) {
+        const buf = Buffer.alloc(64)
+        const got = this.pos >= 64 ? readSync(fd, buf, 0, 64, this.pos - 64) : -1
+        let h = 0
+        for (let i = 0; i < got; i++) h = (h * 31 + buf[i]!) | 0
+        if (got !== 64 || h !== this.seal) this.restart(this.ino)
+      }
       const began = this.pos
       while (this.pos < size && this.pos - began < max) {
         const buf = Buffer.alloc(Math.min(CHUNK, Math.max(max, 64 << 10), size - this.pos))
@@ -126,6 +148,7 @@ export class LogTail {
         if (lines.length) out.push(...this.reader.parse(lines, this.file))
       }
       this.more = this.pos < size
+      this.stampSeal(fd)
     } finally {
       closeSync(fd)
     }

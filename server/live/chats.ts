@@ -311,9 +311,11 @@ export class Chats {
   /** where each reply and usage is in its chat's events, by kind and id: a reply read in two pieces replaces the first */
   private where = new Map<string, Map<string, number>>()
   /** what was read of each log: inode, size and modification time, so an end check knows it is looking at that file */
-  private logStats = new Map<string, { ino: number; size: number; mtime: number }>()
+  private logStats = new Map<string, { ino: number; size: number; mtime: number; pos: number }>()
   /** the last of a chat's logs that gave it events: a log before it with new lines has to be read again in order */
   private lastLog = new Map<string, number>()
+  /** the logs each chat had: a list that changes means what was read of the old one is not its history any more */
+  private logList = new Map<string, string>()
   /** chats whose logs are still being read in the background */
   private reading = new Set<string>()
   /** chats waiting for one of those places */
@@ -433,6 +435,12 @@ export class Chats {
   private readLogs(key: string, logs: string[], inOrder: boolean): { changed: boolean; behind: boolean; startedOver?: boolean } {
     const r = this.agents.record(key)
     if (!r) return { changed: false, behind: false }
+    const list = logs.join('\n')
+    if (this.logList.get(key) !== list) {
+      // its logs are not the ones it had: read them again from the start
+      if (inOrder) return { changed: false, behind: true, startedOver: true }
+      this.logList.set(key, list)
+    }
     let changed = false
     let behind = false
     let left = PIECE
@@ -444,6 +452,8 @@ export class Chats {
       if (privateHome && !privateRuntimePath(privateHome, f)) continue
       let t = this.tails.get(f)
       const was_ = this.logStats.get(f)
+      // the tail started over under it (a seal mismatch): what was read before is not this file's history any more
+      if (t && was_ && t.position < was_.pos) return { changed, behind: true, startedOver: true }
       let now: { ino: number; size: number; mtime: number } | undefined
       try {
         const st = statSync(f)
@@ -474,7 +484,7 @@ export class Chats {
         this.startOver(key, logs)
         return { changed, behind: true }
       }
-      this.logStats.set(f, after)
+      this.logStats.set(f, { ...after, pos: t.position })
       if (ev.length) this.lastLog.set(key, i)
       for (const e of ev) {
         if (privateHome && e.kind === 'job') {
@@ -694,6 +704,7 @@ export class Chats {
     this.events.set(key, [])
     this.where.delete(key)
     this.lastLog.delete(key)
+    this.logList.delete(key)
     for (const f of logs) {
       this.tails.delete(f)
       this.logStats.delete(f)
