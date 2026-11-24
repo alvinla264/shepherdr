@@ -475,6 +475,14 @@ export class Chats {
       const was = t.done
       const ev = t.read(left)
       left -= Math.max(0, t.done - was)
+      // it started over at a file that is not the one read before: that chat reads its logs again from the first
+      if (t.takeRestarted()) {
+        if (inOrder) return { changed, behind: true, startedOver: true }
+        this.events.set(key, [])
+        this.where.delete(key)
+        all.length = 0
+        where.clear()
+      }
       // new lines in a log that is not the last, while later logs are already read: these must not land after them
       if (inOrder && ev.length && (this.lastLog.get(key) ?? -1) > i) return { changed, behind: true, startedOver: true }
       // what was read is only that file's end if the file did not change under the read

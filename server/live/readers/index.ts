@@ -60,6 +60,13 @@ export class LogTail {
 
   /** a small sum over the 64 bytes before the read position: if they changed, the file was rewritten under the read */
   private seal = -1
+  /** it started over at a file that was replaced or rewritten: what it returns is that file from its first line */
+  private restarted = false
+  takeRestarted(): boolean {
+    const r = this.restarted
+    this.restarted = false
+    return r
+  }
   private stampSeal(fd: number): void {
     if (this.pos < 64) {
       this.seal = -1
@@ -162,6 +169,7 @@ export class LogTail {
   }
 
   private restart(ino: number) {
+    this.restarted = true
     this.offset = 0
     this.pos = 0
     this.carry = []
