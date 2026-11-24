@@ -75,6 +75,10 @@ describe.skipIf(!browser)('renaming spaces and machines', () => {
       await places.locator('li[data-project="p:vm-str:gtm"]').getByRole('button', { name: /^go-to-market/ }).click()
       await page.getByRole('textbox', { name: 'Message go-to-market…' }).waitFor()
       await page.locator('section[aria-label="Tasks"]').getByRole('button', { name: /GTM-14/ }).first().waitFor()
+      // and the main home's aggregated list still holds that task (its rows name the place only where nothing else does,
+      // so the renamed names are asserted in the tree, the header and the chat above, not in this row)
+      await places.locator('li[data-project="p:vm-str:~"]').getByRole('button', { name: /^home/ }).click()
+      await page.locator('section[aria-label="Tasks"]').getByRole('button', { name: /GTM-14/ }).first().waitFor()
 
       // a home space is renamed as any space, by the same rules
       expect(await world.act({ type: 'rename', id: 'p:vm-str:~', name: 'My base' })).toMatchObject({ ok: false })

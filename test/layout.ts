@@ -58,7 +58,16 @@ export const pills = (id: string) => `[data-msg="${id}"] button[aria-pressed][da
  *  a blank page is otherwise only a timeout with no evidence. */
 export async function drew(page: Page) {
   try {
-    await page.waitForFunction(() => (document.body?.innerText ?? '').trim().length > 0, undefined, { timeout: 15_000 })
+    // the app's own readiness: until its first snapshot it draws only "Loading…" (or "Can't reach Shepherdr…"), and its
+    // keys do nothing (src/App.tsx useKeyboard returns while there is no snapshot)
+    await page.waitForFunction(
+      () => {
+        const text = (document.body?.innerText ?? '').trim()
+        return text.length > 0 && !/^(Loading…|Can't reach Shepherdr)/.test(text)
+      },
+      undefined,
+      { timeout: 15_000 },
+    )
   } catch (e) {
     const facts = await page
       .evaluate(() => ({ url: location.href, text: (document.body?.innerText ?? '').slice(0, 500).replace(/\n+/g, ' | ') }))
