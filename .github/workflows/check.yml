@@ -82,24 +82,25 @@ jobs:
       - if: steps.playwright.outputs.cache-hit != 'true'
         run: bun x playwright-core install --only-shell chromium && bun x playwright-core install webkit
       # The apt call inside install-deps stalls against the runner's mirror: 73 s for one package, and a 13.5 MB one
-      # late in the list, which has used the whole 15-minute job before the tests start. Two bounded attempts and a
-      # hard failure after them: a dependency is never skipped, and nothing here runs while apt or dpkg still does.
+      # late in the list, which has used the whole 15-minute job before the tests start. This step settles the package
+      # database before anything else touches it, keeps every command inside one deadline, and fails hard: a
+      # dependency is never skipped.
       - name: Browser system dependencies
         run: |
+          set -u
           start=$SECONDS
-          for attempt in 1 2; do
-            if [ "$attempt" = 2 ] && [ $((SECONDS - start)) -gt 360 ]; then
-              echo "::warning::no time for a second attempt after $((SECONDS - start))s"
-              break
-            fi
-            budget=$([ "$attempt" = 1 ] && echo 300 || echo 120)
-            if timeout --signal=TERM --kill-after=20 "$budget" bun x playwright-core install-deps webkit; then
-              echo "system dependencies installed on attempt $attempt"
-              exit 0
-            fi
-            echo "::warning::install-deps webkit failed or timed out on attempt $attempt"
-            [ "$attempt" = 2 ] && break
-            # let apt or dpkg finish or die before anything else touches the package database, then check it is gone
+          deadline=$((start + 420))   # ~7 min for apt, so the 15-minute job still has ~6 for the tests and setup
+          left() { echo $((deadline - SECONDS)); }
+
+          # the only way out without success: say why, show apt's log, fail the step
+          give_up() {
+            echo "::error::$1"
+            sudo tail -n 40 /var/log/apt/term.log || true
+            exit 1
+          }
+
+          # nothing touches the package database while apt or dpkg is still running: TERM, wait, KILL once, then refuse
+          quiet_pkg() {
             sudo pkill -TERM -f 'apt-get|dpkg' || true
             for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -f 'apt-get|dpkg' > /dev/null || break; sleep 1; done
             if pgrep -f 'apt-get|dpkg' > /dev/null; then
@@ -107,17 +108,31 @@ jobs:
               sleep 2
             fi
             if pgrep -f 'apt-get|dpkg' > /dev/null; then
-              echo "::error::a package manager is still running after TERM and KILL"
-              sudo tail -n 40 /var/log/apt/term.log || true
-              exit 1
+              give_up 'a package manager is still running after TERM and KILL'
             fi
-            # settle what a killed run left half configured; both bounded, one at a time
-            sudo timeout --kill-after=10 60 dpkg --configure -a || true
-            sudo timeout --kill-after=10 60 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -f install -y || true
+          }
+
+          for attempt in 1 2; do
+            if [ "$(left)" -le 60 ]; then give_up "only $(left)s left for the package step"; fi
+            budget=$([ "$attempt" = 1 ] && echo 300 || echo 120)
+            if [ "$budget" -gt "$(left)" ]; then budget=$(left); fi
+            if timeout --signal=TERM --kill-after=20 "$budget" bun x playwright-core install-deps webkit; then
+              echo "system dependencies installed on attempt $attempt"
+              exit 0
+            fi
+            echo "::warning::install-deps webkit failed or timed out on attempt $attempt"
+            if [ "$attempt" = 2 ]; then break; fi
+            quiet_pkg
+            if [ "$(left)" -le 90 ]; then give_up "not enough time left to settle the package database"; fi
+            sudo timeout --kill-after=10 60 dpkg --configure -a \
+              || give_up 'dpkg --configure -a failed or timed out; the package database is not settled'
+            quiet_pkg
+            if [ "$(left)" -le 90 ]; then give_up "not enough time left for apt-get -f install"; fi
+            sudo timeout --kill-after=10 90 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -f install -y \
+              || give_up 'apt-get -f install failed or timed out; the package database is not settled'
+            quiet_pkg
           done
-          echo "::error::playwright system dependencies were not installed in two bounded attempts"
-          sudo tail -n 40 /var/log/apt/term.log || true
-          exit 1
+          give_up 'playwright system dependencies were not installed in two bounded attempts'
       # the screen the browser tests open (test/web.ts), built from these files: a build of other files is left unused
       - uses: actions/cache@v4
         with:
