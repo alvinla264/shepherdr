@@ -11,6 +11,8 @@ describe.skipIf(!browser)('unified search', () => {
     const page = await browser!.newPage({ viewport: { width, height: 900 } })
     try {
       await page.goto(url())
+      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto)
+      await page.waitForSelector('#places li')
       await page.keyboard.press('Control+k')
       const search = page.getByRole('combobox', { name: 'Search or jump to' })
       await search.waitFor()
@@ -50,6 +52,8 @@ describe.skipIf(!browser)('unified search', () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
     try {
       await page.goto(url())
+      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto)
+      await page.waitForSelector('#places li')
       await page.keyboard.press('Control+k')
       await page.getByRole('combobox', { name: 'Search or jump to' }).fill('late-stream-needle')
       await page.getByRole('listbox', { name: 'Search results' }).waitFor()
@@ -68,6 +72,8 @@ describe.skipIf(!browser)('unified search', () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
     try {
       await page.goto(url())
+      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto)
+      await page.waitForSelector('#places li')
       await page.keyboard.press('Control+k')
       const search = page.getByRole('combobox', { name: 'Search or jump to' })
       await search.fill('home nas')

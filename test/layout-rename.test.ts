@@ -70,11 +70,10 @@ describe.skipIf(!browser)('renaming spaces and machines', () => {
       // the header says where it is
       await page.getByText('Space on Work VM').waitFor()
 
-      // every task (the main machine's home space, its chip taken off), by status: each saying its machine's and space's
-      // new names
+      // every task (the home space lists every machine's own, so there is no machine chip to take off), by status: each
+      // saying its machine's and space's new names
       await places.locator('li[data-project="p:vm-str:~"]').getByRole('button', { name: /^home/ }).click()
       const tasks = page.locator('section[aria-label="Tasks"]')
-      await tasks.getByRole('button', { name: 'Remove home · Work VM' }).click()
       await tasks.locator('li', { hasText: 'Work VM · go-to-market' }).first().waitFor()
 
       // a home space is renamed as any space, by the same rules
