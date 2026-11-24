@@ -5,7 +5,7 @@ import { startApp } from './app.ts'
 import { DemoWorld } from './demo/world.ts'
 import { Push } from './push.ts'
 import type { Source } from './source.ts'
-import { HOME, writeJson } from './store.ts'
+import { HOME, setServing, writeJson } from './store.ts'
 
 const root = join(import.meta.dir, '..')
 const port = Number(process.env.SHEPHERDR_PORT ?? 7787)
@@ -17,6 +17,7 @@ async function makeSource(): Promise<Source> {
   return new LiveSource()
 }
 
+setServing()
 const source = await makeSource()
 const push = kind === 'live' && !process.env.SHEPHERDR_BOX ? new Push() : undefined
 if (push && 'devices' in source && 'pushWarnings' in source) {

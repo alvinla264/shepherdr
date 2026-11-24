@@ -204,11 +204,11 @@ describe.skipIf(!browser)('repository base', () => {
       expect(world.tasks.find((t) => t.id === 'GTM-15')!.base).toBe('main')
       await settings.getByRole('button', { name: 'Close', exact: true }).click()
       await page.getByRole('button', { name: /Ready GTM-15 Fix webhook/ }).click()
-      // the task page can be drawn twice (middle and a pane): assert a visible line, not which copy
-      await page.locator('div[title="Merges into main"]:visible').first().waitFor()
+      // the task page can be drawn twice (middle and a pane): assert the line is on screen, not which copy
+      await page.getByText('Merges into main', { exact: true }).first().waitFor()
       await page.setViewportSize({ width: 390, height: 844 })
-      // the task page can be drawn twice (middle and a pane): assert a visible line, not which copy
-      await page.locator('div[title="Merges into main"]:visible').first().waitFor()
+      // the task page can be drawn twice (middle and a pane): assert the line is on screen, not which copy
+      await page.getByText('Merges into main', { exact: true }).first().waitFor()
     } finally {
       world.bases['p:vm-str:gtm'] = before
       world.emit('snapshot')

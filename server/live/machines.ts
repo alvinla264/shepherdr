@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, sta
 import { join, relative } from 'node:path'
 import type { Action, Alert, Chat, Snapshot, TermScreen } from '../../shared/types.ts'
 import { Emitter, type Overview } from '../source.ts'
-import { HOME, readJson, writeJson } from '../store.ts'
+import { HOME, isServing, readJson, writeJson } from '../store.ts'
 import { boxInfo, browserVersion, helperVersion, installHelper, lacks, machineStatus, onMachine, probe, savedMachines, type Probe, type Saved } from './install.ts'
 import { mirrorHomes } from './mirror.ts'
 import { q, sshArgs } from './box.ts'
@@ -481,7 +481,7 @@ export class Machines extends Emitter<Events> {
     if (!this.active(l) || l.busy || !l.worker) return
     l.busy = true
     l.health.restarting()
-    console.error(`shepherdr: ${l.rec.machine}: link unhealthy for 3 minutes; replacing worker`)
+    if (isServing()) console.info(`shepherdr: ${l.rec.machine}: link unhealthy for 3 minutes; replacing worker`)
     const w = l.worker
     l.ws?.close()
     l.ws = undefined

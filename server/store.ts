@@ -13,6 +13,12 @@ function testHome() {
   return dir
 }
 
+/** whether this process serves Shepherdr (server/main.ts), rather than running one command and leaving: its
+ *  diagnostics belong in its log, and a command's own output stays clean on both stdout and stderr */
+let serving = false
+export const setServing = () => { serving = true }
+export const isServing = () => serving
+
 export function readJson<T>(name: string, fallback: T): T {
   const f = join(HOME, name)
   try {

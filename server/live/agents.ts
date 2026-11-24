@@ -11,7 +11,7 @@ import { homedir } from 'node:os'
 import { mkdirSync, readFileSync, statSync, watch, type FSWatcher } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { Emitter } from '../source.ts'
-import { readJson, writeJson } from '../store.ts'
+import { isServing, readJson, writeJson } from '../store.ts'
 import type { AgentRuntime, TermScreen } from '../../shared/types.ts'
 import { herdr, HerdrError, Subscription, type AgentInfo, type AgentStatus, type HerdrEvent } from './herdr.ts'
 import { ClaudeSessions, Reviewers, screenBackground, sessionBackground, type Background } from './readers/background.ts'
@@ -469,7 +469,7 @@ export class Agents extends Emitter<Events> {
     try {
       const list = await herdr.agents()
       if (this.stopped) return
-      if (!this.reachable && BOX) console.error('shepherdr: herdr link recovered')
+      if (!this.reachable && BOX && isServing()) console.info('shepherdr: herdr link recovered')
       this.recovery.success()
       this.retryAt = 0
       this.reachable = true
@@ -514,7 +514,7 @@ export class Agents extends Emitter<Events> {
     } catch {
       if (BOX) this.retryAt = Date.now() + this.recovery.fail()
       if (this.reachable) {
-        if (BOX) console.error('shepherdr: herdr link lost; retrying (3–30s backoff)')
+        if (BOX && isServing()) console.info('shepherdr: herdr link lost; retrying (3–30s backoff)')
         this.reachable = false
         this.emit('status', '*', 'gone')
       }
