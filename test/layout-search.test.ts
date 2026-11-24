@@ -11,8 +11,9 @@ describe.skipIf(!browser)('unified search', () => {
     const page = await browser!.newPage({ viewport: { width, height: 900 } })
     try {
       await page.goto(url())
-      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto)
-      await page.waitForSelector('#places li')
+      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto); rows exist
+      // before they are on screen (a folded status group, a phone's shut drawer), so attached is the fact that matters
+      await page.waitForSelector('#places li', { state: 'attached' })
       await page.keyboard.press('Control+k')
       const search = page.getByRole('combobox', { name: 'Search or jump to' })
       await search.waitFor()
@@ -21,7 +22,8 @@ describe.skipIf(!browser)('unified search', () => {
       const group = page.getByRole('group', { name: 'Messages', exact: true })
       await group.getByRole('option').first().waitFor()
       expect(await group.getByRole('option').count()).toBe(8)
-      await group.getByRole('button', { name: /Show more messages/ }).click()
+      const more = group.getByRole('button', { name: /Show more messages/ })
+      await until(async () => { try { await more.click({ timeout: 2_000 }); return true } catch { return false } }, (ok) => ok, 10_000)
       expect(await group.getByRole('option').count()).toBe(28)
       const hit = group.getByRole('option', { name: /^Search paging needle 29 / })
       await hit.click()
@@ -52,8 +54,9 @@ describe.skipIf(!browser)('unified search', () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
     try {
       await page.goto(url())
-      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto)
-      await page.waitForSelector('#places li')
+      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto); rows exist
+      // before they are on screen (a folded status group, a phone's shut drawer), so attached is the fact that matters
+      await page.waitForSelector('#places li', { state: 'attached' })
       await page.keyboard.press('Control+k')
       await page.getByRole('combobox', { name: 'Search or jump to' }).fill('late-stream-needle')
       await page.getByRole('listbox', { name: 'Search results' }).waitFor()
@@ -72,8 +75,9 @@ describe.skipIf(!browser)('unified search', () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
     try {
       await page.goto(url())
-      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto)
-      await page.waitForSelector('#places li')
+      // the shortcut only opens search once the app has drawn (a slow runner is still loading after goto); rows exist
+      // before they are on screen (a folded status group, a phone's shut drawer), so attached is the fact that matters
+      await page.waitForSelector('#places li', { state: 'attached' })
       await page.keyboard.press('Control+k')
       const search = page.getByRole('combobox', { name: 'Search or jump to' })
       await search.fill('home nas')

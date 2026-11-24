@@ -14,6 +14,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
       const before = JSON.stringify(c.agent)
       const cards = c.messages.filter((m) => m.card?.restart).length
       const page = await browser!.newPage({ viewport: { width: 390, height: 844 } })
+      page.setDefaultTimeout(10_000) // Surface the failing locator before the enclosing test deadline.
       await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent(p.id)}${task ? '&task=GTM-17' : ''}`)
       const controls = page.locator('[data-agent-controls]:visible').last()
       await page.locator('[data-composer]:visible').last().waitFor()
@@ -30,6 +31,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
 
   test("a task's ⋯ opens the sheet: Settings' CLI picked, another CLI offers its models; Restart posts the card", async () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
+    page.setDefaultTimeout(10_000) // Surface the failing locator before the enclosing test deadline.
     await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent('p:vm-str:gtm')}`)
     const row = page.locator('section[aria-label="Tasks"] li', { hasText: 'GTM-17' })
     await row.hover()
