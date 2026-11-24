@@ -9,6 +9,7 @@ const { browser, world, url } = await layout()
 describe.skipIf(!browser)('renaming spaces and machines', () => {
   test('a space renames in its row, a machine in Rename machine: Enter keeps it, Escape does not, a name taken or against the rules is refused; it shows in the header, tasks and search (desktop)', async () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 800 } })
+    page.setDefaultTimeout(10_000) // Surface the failing locator before the enclosing test deadline.
     try {
       await page.goto(url().replace('place=vm-str/home', 'place=vm-str/gtm'))
       const places = page.locator('#places')

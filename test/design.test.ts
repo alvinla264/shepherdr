@@ -129,7 +129,7 @@ describe('one design across the screen', () => {
         .filter((r) => !/^rounded-\[(?:inherit|calc\(.*)\]$|^rounded-b[lr]-\[6px\]$/.test(r))
         .map((r) => `${f} ${r}`),
     )
-    expect(own.sort()).toEqual(['plugins/browser/client.tsx rounded-[3px]', 'plugins/chat/client.tsx rounded-[4px]', 'src/App.tsx rounded-[11px]', 'src/ui.tsx rounded-md'])
+    expect(own.sort()).toEqual(['plugins/browser/client.tsx rounded-[3px]', 'plugins/chat/client.tsx rounded-[4px]', 'plugins/keyboard/search.tsx rounded-lg', 'src/App.tsx rounded-[11px]', 'src/ui.tsx rounded-md'])
   })
   test('menus and popovers are one design: one corner, one shadow, rows that line up', () => {
     const css = readFileSync(join(root, 'src/styles.css'), 'utf8')
