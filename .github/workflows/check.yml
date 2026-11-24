@@ -70,7 +70,8 @@ jobs:
           restore-keys: bun-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       # Real Autopilot namespace enforcement tests use fake agents and no provider credentials.
-      - run: sudo apt-get update -qq && sudo apt-get install -y bubblewrap
+      # bounded like the browser dependencies below: the same mirror has stalled this job before
+      - run: timeout --signal=TERM --kill-after=20 240 sudo sh -c 'apt-get update -qq && apt-get install -y bubblewrap'
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Chromium's headless shell for playwright-core, at the version it wants (the runner has the libraries it needs),
       # and WebKit, Safari's engine, for an iPhone's tests (layout-iphone.test.ts), with the libraries it needs
@@ -82,55 +83,66 @@ jobs:
       - if: steps.playwright.outputs.cache-hit != 'true'
         run: bun x playwright-core install --only-shell chromium && bun x playwright-core install webkit
       # The apt call inside install-deps stalls against the runner's mirror: 73 s for one package, and a 13.5 MB one
-      # late in the list, which has used the whole 15-minute job before the tests start. This step settles the package
-      # database before anything else touches it, keeps every command inside one deadline, and fails hard: a
-      # dependency is never skipped.
+      # late in the list, which has used the whole 15-minute job before the tests start. The runner's own step cap makes
+      # the bound hard; inside it, nothing runs beside apt and a dependency is never skipped: two attempts, then a
+      # failure.
       - name: Browser system dependencies
+        timeout-minutes: 8
         run: |
           set -u
-          start=$SECONDS
-          deadline=$((start + 420))   # ~7 min for apt, so the 15-minute job still has ~6 for the tests and setup
-          left() { echo $((deadline - SECONDS)); }
-
-          # the only way out without success: say why, show apt's log, fail the step
           give_up() {
             echo "::error::$1"
-            sudo tail -n 40 /var/log/apt/term.log || true
+            sudo tail -n 20 /var/log/apt/term.log || true
             exit 1
           }
-
+          # is a package manager running? 1 from pgrep means none; anything else is not "none"
+          pkg_running() {
+            local out st
+            if out=$(pgrep -af '(^|/)(apt|apt-get|dpkg)( |$)|unattended-upgrade'); then
+              printf '%s\n' "$out"
+              return 0
+            else
+              st=$?
+            fi
+            if [ "$st" = 1 ]; then return 1; fi
+            give_up "could not inspect the process table (pgrep exit $st)"
+          }
+          # 1 from pkill means nothing matched, which is what we want anyway
+          try_signal() {
+            local st
+            if sudo pkill -"$1" -f '(^|/)(apt|apt-get|dpkg)( |$)|unattended-upgrade'; then return 0; else st=$?; fi
+            if [ "$st" = 1 ]; then return 0; fi
+            give_up "could not signal the package manager (pkill exit $st)"
+          }
           # nothing touches the package database while apt or dpkg is still running: TERM, wait, KILL once, then refuse
           quiet_pkg() {
-            sudo pkill -TERM -f 'apt-get|dpkg' || true
-            for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -f 'apt-get|dpkg' > /dev/null || break; sleep 1; done
-            if pgrep -f 'apt-get|dpkg' > /dev/null; then
-              sudo pkill -KILL -f 'apt-get|dpkg' || true
-              sleep 2
-            fi
-            if pgrep -f 'apt-get|dpkg' > /dev/null; then
-              give_up 'a package manager is still running after TERM and KILL'
-            fi
+            if ! pkg_running > /dev/null; then return 0; fi
+            try_signal TERM
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              if ! pkg_running > /dev/null; then return 0; fi
+              sleep 1
+            done
+            try_signal KILL
+            sleep 2
+            if pkg_running > /dev/null; then give_up 'a package manager is still running after TERM and KILL'; fi
+            return 0
           }
 
           for attempt in 1 2; do
-            if [ "$(left)" -le 60 ]; then give_up "only $(left)s left for the package step"; fi
-            budget=$([ "$attempt" = 1 ] && echo 300 || echo 120)
-            if [ "$budget" -gt "$(left)" ]; then budget=$(left); fi
-            if timeout --signal=TERM --kill-after=20 "$budget" bun x playwright-core install-deps webkit; then
+            quiet_pkg
+            budget=$([ "$attempt" = 1 ] && echo 240 || echo 120)
+            if timeout --signal=TERM --kill-after=15 "$budget" bun x playwright-core install-deps webkit; then
               echo "system dependencies installed on attempt $attempt"
               exit 0
             fi
             echo "::warning::install-deps webkit failed or timed out on attempt $attempt"
             if [ "$attempt" = 2 ]; then break; fi
             quiet_pkg
-            if [ "$(left)" -le 90 ]; then give_up "not enough time left to settle the package database"; fi
             sudo timeout --kill-after=10 60 dpkg --configure -a \
               || give_up 'dpkg --configure -a failed or timed out; the package database is not settled'
             quiet_pkg
-            if [ "$(left)" -le 90 ]; then give_up "not enough time left for apt-get -f install"; fi
             sudo timeout --kill-after=10 90 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -f install -y \
               || give_up 'apt-get -f install failed or timed out; the package database is not settled'
-            quiet_pkg
           done
           give_up 'playwright system dependencies were not installed in two bounded attempts'
       # the screen the browser tests open (test/web.ts), built from these files: a build of other files is left unused
