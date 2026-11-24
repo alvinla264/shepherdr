@@ -157,6 +157,8 @@ describe('an agent whose turn ended', () => {
     screens.p2 = WOKE_AND_DONE
     await a.refresh()
     expect(a.background('T-1/Agent')).toBeUndefined()
+    // the same background read clears what its screen no longer shows: wait for it, bounded, as above
+    for (let i = 0; a.background('T-2/Agent') !== undefined && i < 400; i++) await Bun.sleep(5)
     expect(a.background('T-2/Agent')).toBeUndefined()
     expect(told.sort()).toEqual(['T-1/Agent', 'T-2/Agent'])
     a.stop()
