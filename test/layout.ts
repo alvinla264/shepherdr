@@ -53,16 +53,17 @@ export async function still(loc: Locator, ms = 300) {
 }
 export const pills = (id: string) => `[data-msg="${id}"] button[aria-pressed][data-keep-box]`
 
-/** Wait for the screen to have drawn, and when it has not, say what the page does hold: a browser test that fails on a
- *  blank page is otherwise only a timeout with no evidence. */
-export async function drew(page: Page, selector = '#places li') {
+/** Wait for the screen to have drawn — anything at all on it: the place tree is a shut drawer on a phone and a narrow
+ *  window, so it is no readiness signal. When nothing appears, say what the page does hold: a browser test that fails on
+ *  a blank page is otherwise only a timeout with no evidence. */
+export async function drew(page: Page) {
   try {
-    await page.waitForSelector(selector, { state: 'attached', timeout: 15_000 })
+    await page.waitForFunction(() => (document.body?.innerText ?? '').trim().length > 0, undefined, { timeout: 15_000 })
   } catch (e) {
     const facts = await page
       .evaluate(() => ({ url: location.href, text: (document.body?.innerText ?? '').slice(0, 500).replace(/\n+/g, ' | ') }))
       .catch(() => null)
-    throw new Error(`the screen did not draw ${selector} within 15s: ${JSON.stringify(facts)}; ${String(e).slice(0, 200)}`)
+    throw new Error(`the screen drew nothing within 15s: ${JSON.stringify(facts)}; ${String(e).slice(0, 200)}`)
   }
 }
 export type Box = { left: number; right: number; top: number; bottom: number }
