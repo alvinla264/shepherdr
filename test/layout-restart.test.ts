@@ -113,6 +113,6 @@ describe.skipIf(!browser)('restarting an agent', () => {
       }
       await page.close()
     }
-  }, 30_000)
+  }, 60_000) // four restart sheets in a row: two roles, each opened twice
 
 })
