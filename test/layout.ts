@@ -52,6 +52,19 @@ export async function still(loc: Locator, ms = 300) {
   }
 }
 export const pills = (id: string) => `[data-msg="${id}"] button[aria-pressed][data-keep-box]`
+
+/** Wait for the screen to have drawn, and when it has not, say what the page does hold: a browser test that fails on a
+ *  blank page is otherwise only a timeout with no evidence. */
+export async function drew(page: Page, selector = '#places li') {
+  try {
+    await page.waitForSelector(selector, { state: 'attached', timeout: 15_000 })
+  } catch (e) {
+    const facts = await page
+      .evaluate(() => ({ url: location.href, text: (document.body?.innerText ?? '').slice(0, 500).replace(/\n+/g, ' | ') }))
+      .catch(() => null)
+    throw new Error(`the screen did not draw ${selector} within 15s: ${JSON.stringify(facts)}; ${String(e).slice(0, 200)}`)
+  }
+}
 export type Box = { left: number; right: number; top: number; bottom: number }
 
 /** the lists show everything at the main home space (no chips there): every machine's tasks and artifacts, as before

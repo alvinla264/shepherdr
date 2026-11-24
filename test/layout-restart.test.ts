@@ -1,6 +1,6 @@
 // Minimal restart dialogs for both chat roles; only GitHub runs these browser tests.
 import { describe, expect, test } from 'bun:test'
-import { layout } from './layout.ts'
+import { drew, layout } from './layout.ts'
 
 const { browser, world, server } = await layout({ everything: true })
 
@@ -16,6 +16,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
       const page = await browser!.newPage({ viewport: { width: 390, height: 844 } })
       page.setDefaultTimeout(10_000) // Surface the failing locator before the enclosing test deadline.
       await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent(p.id)}${task ? '&task=GTM-17' : ''}`)
+    await drew(page)
       const controls = page.locator('[data-agent-controls]:visible').last()
       await page.locator('[data-composer]:visible').last().waitFor()
       expect(await controls.count()).toBe(0)
@@ -33,6 +34,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
     page.setDefaultTimeout(10_000) // Surface the failing locator before the enclosing test deadline.
     await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent('p:vm-str:gtm')}`)
+    await drew(page)
     const row = page.locator('section[aria-label="Tasks"] li', { hasText: 'GTM-17' })
     await row.hover()
     await row.getByRole('button', { name: 'More for this task' }).click()
@@ -60,6 +62,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
     const ctx = await browser!.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
     const page = await ctx.newPage()
     await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent(p.id)}`)
+    await drew(page)
     await page.getByRole('button', { name: /^Menu/ }).click()
     await page.getByRole('menuitem', { name: 'Restart agent…' }).click()
     const sheet = page.getByRole('alertdialog', { name: 'Restart coordinator?' })
@@ -92,6 +95,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
         }
       })
       await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent(p.id)}${task ? '&task=GTM-17' : ''}`)
+    await drew(page)
       for (const save of [false, true]) {
         await page.locator('[data-composer]:visible button[aria-label="Attach files and more"]').last().click()
         await page.locator('[data-agent-controls]:visible').last().getByRole('menuitem', { name: /^Model:/ }).click()
