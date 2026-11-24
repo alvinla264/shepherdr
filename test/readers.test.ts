@@ -481,7 +481,7 @@ describe('LogTail', () => {
     expect(tail.takeRestarted()).toBe(true)
     expect(tail.takeRestarted()).toBe(false)
 
-    // and a tail that had read nothing says nothing, even when the file it was made for is replaced
+    // and a tail that had read nothing says nothing, even when the file it was made for grew or was written over
     const g = join(dir, 'seal.new.jsonl')
     writeFileSync(g, piSession('s2'))
     const fresh = new LogTail(g, readerFor('pi')!)
