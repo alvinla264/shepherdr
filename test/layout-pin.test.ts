@@ -124,13 +124,16 @@ describe.skipIf(!browser)('the lists’ chips', () => {
     await list.getByRole('button', { name: 'Locked: unlock filters to follow the space picked' }).waitFor()
     expect(await chips(page)).toEqual(['p:vm-str:gtm', 'p:mac:lilla-varlden'])
 
-    // unpinned, they follow the space picked again, and a task opens over the list as before
+    // unpinned, they follow the space picked again: the main home space, which is everything (docs/spaces.md)
     await list.getByRole('button', { name: 'Locked: unlock filters to follow the space picked' }).click()
     await list.getByRole('button', { name: 'Lock filters: keep them when switching spaces' }).waitFor()
-    await lv3.waitFor({ state: 'detached' })
-    // the tree groups a space under each status: click the row's own name button, not a status or fold button
+    expect(await chips(page)).toEqual([])
+    expect(await lv3.isVisible()).toBe(true)
+    // picking a space narrows them to it, and a task opens over the list as before; the tree groups a space under each
+    // status, so click the row's own name button rather than a status or fold button
     await page.locator('#places li[data-project="p:vm-str:gtm"]').getByRole('button', { name: /^gtm/ }).click()
     expect(await chips(page)).toEqual(['p:vm-str:gtm'])
+    await lv3.waitFor({ state: 'detached' })
     await list.getByRole('button', { name: /GTM-16 Docs/ }).click()
     await page.getByRole('textbox', { name: 'Message GTM-16…' }).waitFor()
     expect(await page.getByRole('textbox', { name: 'Message gtm…' }).isVisible()).toBe(true)

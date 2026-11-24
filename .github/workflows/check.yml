@@ -81,7 +81,27 @@ jobs:
           key: playwright-shell-webkit-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - if: steps.playwright.outputs.cache-hit != 'true'
         run: bun x playwright-core install --only-shell chromium && bun x playwright-core install webkit
-      - run: bun x playwright-core install-deps webkit
+      # The apt call inside install-deps stalls against the runner's mirror: 73 s for one package, and a 13.5 MB one
+      # late in the list, which has taken the whole 15-minute job before the tests start. Each attempt is bounded and
+      # killed, two at most, then the step fails: a bounded retry, never an ignored dependency failure.
+      - name: Browser system dependencies
+        run: |
+          for attempt in 1 2; do
+            if timeout --signal=TERM --kill-after=30 420 bun x playwright-core install-deps webkit; then
+              echo "system dependencies installed on attempt $attempt"
+              exit 0
+            fi
+            echo "::warning::install-deps webkit failed or timed out on attempt $attempt"
+            # a killed apt can leave dpkg half configured and its locks held: settle it before trying again, one at a time
+            sudo pkill -TERM -f 'apt-get|dpkg' || true
+            sleep 3
+            sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock
+            sudo dpkg --configure -a || true
+            sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -f install -y || true
+          done
+          echo "::error::playwright system dependencies were not installed in two bounded attempts"
+          sudo tail -n 40 /var/log/apt/term.log || true
+          exit 1
       # the screen the browser tests open (test/web.ts), built from these files: a build of other files is left unused
       - uses: actions/cache@v4
         with:
