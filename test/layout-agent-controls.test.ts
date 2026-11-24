@@ -62,9 +62,10 @@ describe.skipIf(!browser)('composer + agent controls', () => {
     expect(await controls.getByRole('menuitem', { name: 'Effort: Not reported. Select and restart', exact: true }).count()).toBe(1)
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
     await page.locator('[data-composer]:visible button[aria-label="Attach files and more"]').last().click()
-    // the popup itself must go, not just a state on the button: wait for its removal, bounded, then assert it is gone
-    await page.locator('[data-agent-controls]:visible').last().waitFor({ state: 'detached', timeout: 5_000 })
-    expect(await controls.count()).toBe(0)
+    // the popup itself must leave the page, not just stop being visible and not just a state on the button: the element
+    // is not inside the composer (checked in the built app), so wait, bounded, for the unfiltered element to be gone
+    await page.locator('[data-agent-controls]').first().waitFor({ state: 'detached', timeout: 5_000 })
+    expect(await page.locator('[data-agent-controls]').count()).toBe(0)
     expect(world.chats[key].agent).toEqual({ kind: 'codex' })
     await page.close()
   }, 30_000)

@@ -82,22 +82,38 @@ jobs:
       - if: steps.playwright.outputs.cache-hit != 'true'
         run: bun x playwright-core install --only-shell chromium && bun x playwright-core install webkit
       # The apt call inside install-deps stalls against the runner's mirror: 73 s for one package, and a 13.5 MB one
-      # late in the list, which has taken the whole 15-minute job before the tests start. Each attempt is bounded and
-      # killed, two at most, then the step fails: a bounded retry, never an ignored dependency failure.
+      # late in the list, which has used the whole 15-minute job before the tests start. Two bounded attempts and a
+      # hard failure after them: a dependency is never skipped, and nothing here runs while apt or dpkg still does.
       - name: Browser system dependencies
         run: |
+          start=$SECONDS
           for attempt in 1 2; do
-            if timeout --signal=TERM --kill-after=30 420 bun x playwright-core install-deps webkit; then
+            if [ "$attempt" = 2 ] && [ $((SECONDS - start)) -gt 360 ]; then
+              echo "::warning::no time for a second attempt after $((SECONDS - start))s"
+              break
+            fi
+            budget=$([ "$attempt" = 1 ] && echo 300 || echo 120)
+            if timeout --signal=TERM --kill-after=20 "$budget" bun x playwright-core install-deps webkit; then
               echo "system dependencies installed on attempt $attempt"
               exit 0
             fi
             echo "::warning::install-deps webkit failed or timed out on attempt $attempt"
-            # a killed apt can leave dpkg half configured and its locks held: settle it before trying again, one at a time
+            [ "$attempt" = 2 ] && break
+            # let apt or dpkg finish or die before anything else touches the package database, then check it is gone
             sudo pkill -TERM -f 'apt-get|dpkg' || true
-            sleep 3
-            sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock
-            sudo dpkg --configure -a || true
-            sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -f install -y || true
+            for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -f 'apt-get|dpkg' > /dev/null || break; sleep 1; done
+            if pgrep -f 'apt-get|dpkg' > /dev/null; then
+              sudo pkill -KILL -f 'apt-get|dpkg' || true
+              sleep 2
+            fi
+            if pgrep -f 'apt-get|dpkg' > /dev/null; then
+              echo "::error::a package manager is still running after TERM and KILL"
+              sudo tail -n 40 /var/log/apt/term.log || true
+              exit 1
+            fi
+            # settle what a killed run left half configured; both bounded, one at a time
+            sudo timeout --kill-after=10 60 dpkg --configure -a || true
+            sudo timeout --kill-after=10 60 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -f install -y || true
           done
           echo "::error::playwright system dependencies were not installed in two bounded attempts"
           sudo tail -n 40 /var/log/apt/term.log || true
