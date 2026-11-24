@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { layout, until } from './layout.ts'
+import { layout, settled, until } from './layout.ts'
 
 const { browser, world, url } = await layout({ everything: true })
 
@@ -22,9 +22,11 @@ describe.skipIf(!browser)('unified search', () => {
       const group = page.getByRole('group', { name: 'Messages', exact: true })
       await group.getByRole('option').first().waitFor()
       expect(await group.getByRole('option').count()).toBe(8)
-      const more = group.getByRole('button', { name: /Show more messages/ })
-      await until(async () => { try { await more.click({ timeout: 2_000 }); return true } catch { return false } }, (ok) => ok, 10_000)
-      expect(await group.getByRole('option').count()).toBe(28)
+      // the list settles before the button is actioned, and the page it loads arrives a moment later: wait for the
+      // count itself rather than reading it once
+      await settled(page)
+      await group.getByRole('button', { name: /Show more messages/ }).click()
+      expect(await until(() => group.getByRole('option').count(), (n) => n === 28, 10_000)).toBe(28)
       const hit = group.getByRole('option', { name: /^Search paging needle 29 / })
       await hit.click()
       expect(page.url()).toContain('task=LV-3')
