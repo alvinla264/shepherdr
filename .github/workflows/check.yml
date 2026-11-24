@@ -89,11 +89,17 @@ jobs:
       - name: Browser system dependencies
         timeout-minutes: 5
         run: |
-          if timeout --signal=TERM --kill-after=15 120 bun x playwright-core install-deps webkit; then
+          timeout --signal=TERM --kill-after=15 120 bun x playwright-core install-deps webkit && {
             echo "system dependencies installed"
             exit 0
+          }
+          code=$?
+          # 124 is timeout's own status, 137 a command killed after it; anything else is the installer's own failure
+          if [ "$code" = 124 ] || [ "$code" = 137 ]; then
+            echo "::error::install-deps webkit timed out after 120s (exit $code): the runner's package mirror is likely stalled, rerun the job"
+          else
+            echo "::error::install-deps webkit failed (exit $code); its own output is above and apt's log follows"
           fi
-          echo "::error::install-deps webkit failed or timed out; the runner's package mirror is likely stalled: rerun the job"
           sudo tail -n 20 /var/log/apt/term.log || true
           exit 1
       # the screen the browser tests open (test/web.ts), built from these files: a build of other files is left unused
