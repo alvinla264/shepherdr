@@ -457,6 +457,38 @@ describe('LogTail', () => {
   test('a missing file reads as nothing', () => {
     expect(new LogTail(join(dir, 'none.jsonl'), readerFor('claude')!).read()).toEqual([])
   })
+
+  // It said so on its very first read, when it had read nothing yet: the chat then threw away what it held and read the
+  // whole log again from the start. On a log that changes while it is read that began again on every pass, and a watched
+  // chat read the same tens of megabytes over and over.
+  test('says a file started over only when it had read some of it, and then it really had', () => {
+    const f = join(dir, 'seal.jsonl')
+    const first = piSession('s1') + piUser('e1', 'first prompt')
+    writeFileSync(f, first)
+    const tail = new LogTail(f, readerFor('pi')!)
+    expect(brief(tail.read())).toHaveLength(2)
+    expect(tail.takeRestarted()).toBe(false)
+
+    // more lines at its end: nothing it read was contradicted
+    appendFileSync(f, piUser('e2', 'second'))
+    expect(brief(tail.read())).toEqual(['user:second'])
+    expect(tail.takeRestarted()).toBe(false)
+
+    // written over and past: what it read is not that file's history any more
+    const other = piSession('s1') + piUser('e1', 'other prompt') + piUser('e2', 'and another')
+    writeFileSync(f, other)
+    expect(brief(tail.read())).toEqual(['session:session-s1', 'user:other prompt', 'user:and another'])
+    expect(tail.takeRestarted()).toBe(true)
+    expect(tail.takeRestarted()).toBe(false)
+
+    // and a tail that had read nothing says nothing, even when the file it was made for is replaced
+    const g = join(dir, 'seal.new.jsonl')
+    writeFileSync(g, piSession('s2'))
+    const fresh = new LogTail(g, readerFor('pi')!)
+    writeFileSync(g, piSession('s3') + piUser('e1', 'x'))
+    expect(brief(fresh.read())).toEqual(['session:session-s3', 'user:x'])
+    expect(fresh.takeRestarted()).toBe(false)
+  })
 })
 
 describe('finding logs', () => {

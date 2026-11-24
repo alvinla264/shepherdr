@@ -169,7 +169,10 @@ export class LogTail {
   }
 
   private restart(ino: number) {
-    this.restarted = true
+    // a tail's first read is not a start-over: it read nothing before that this file could contradict, and saying it was
+    // made the chat wipe what it held and read the whole log again from the start, every time it began again on a log
+    // that changed while it was read: a watched chat re-read tens of megabytes a second, and the server spun
+    if (this.pos > 0) this.restarted = true
     this.offset = 0
     this.pos = 0
     this.carry = []
