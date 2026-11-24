@@ -541,8 +541,10 @@ describe('settings', () => {
     expect(s.set('reviewer.effort', 'ultra').ok).toBe(true)
     expect(s.set('reviewer.model', 'claude-opus-5-5').ok).toBe(false)
     for (const k of ['coordinator.model', 'reviewer.effort']) s.set(k, null)
-    // any agent herdr can start may be chosen, by its name or its kind; it is kept by its name
-    expect(s.set('task.agent', 'Qwen').ok).toBe(true)
+    // only a CLI with a chat reader may run a task (docs/settings.md: other herdr CLIs are refused before a chat
+    // launch), by its name or its kind; it is kept by its name
+    expect(s.set('task.agent', 'Qwen').ok).toBe(false)
+    expect(s.set('task.agent', 'codex').ok).toBe(true)
     expect(s.set('coordinator.agent', 'codex').ok).toBe(true)
     expect(s.get('coordinator.agent')).toBe('Codex')
     s.set('task.agent', null)
@@ -580,7 +582,7 @@ describe('settings', () => {
     expect(effortFor('gemini', 'high')).toBeUndefined()
   })
   test('Settings offer each role the models and levels of its own CLI, showing a stored one that no longer fits as what it starts with', () => {
-    const s = new Settings()
+    let s = new Settings()
     // the Reviewer's rows sit in How tasks work (its Settings block), the rest in Agents
     const rows = () => s.sections([], [], null).filter((x) => x.name === 'Agents' || x.name === 'How tasks work').flatMap((x) => x.rows)
     const row = (group: string, label: string) => rows().find((r) => r.group === group && r.label === label)!
@@ -596,8 +598,10 @@ describe('settings', () => {
     expect(row('Tasks', 'Model').value).toBe('Opus 5.5')
     expect(row('Tasks', 'Effort').value).toBe('max')
     expect(s.harness('task')).toEqual({ kind: 'claude', model: 'claude-opus-5-5', effort: 'max' })
-    // a CLI Shepherdr passes neither to picks its own; the backup has its own model and effort
-    s.set('task.agent', 'Qwen')
+    // a stored CLI Shepherdr passes neither to picks its own (shown even when it is one this tree may not start):
+    // the file is written rather than set, so the row renders what a saved file has
+    writeJson('settings.json', { everywhere: { 'task.agent': 'Qwen' } })
+    s = new Settings()
     expect(row('Tasks', 'Model')).toMatchObject({ value: "Qwen's own", fixed: true })
     expect(row('Backup', 'Model').options![1]).toBe('GPT-6.1-Sol')
     for (const k of ['task.agent', 'task.model', 'task.effort']) s.set(k, null)

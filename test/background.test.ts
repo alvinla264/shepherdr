@@ -146,6 +146,9 @@ describe('an agent whose turn ended', () => {
     a.on('status', (key) => told.push(key))
     await a.refresh()
     expect(a.background('T-1/Agent')).toBe('agents')
+    // T-2 has no session file: its screen says what still runs, read in the background (agents.ts readBackground), so
+    // wait for that read to land rather than for a fixed while
+    for (let i = 0; a.background('T-2/Agent') !== 'agents' && i < 400; i++) await Bun.sleep(5)
     expect(a.background('T-2/Agent')).toBe('agents')
     // the reviewer finished, woke it, and it stopped again in between herdr's looks: told, though herdr saw nothing
     told.length = 0
