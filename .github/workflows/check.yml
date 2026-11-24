@@ -71,7 +71,7 @@ jobs:
       - run: bun install --frozen-lockfile
       # Real Autopilot namespace enforcement tests use fake agents and no provider credentials.
       # bounded like the browser dependencies below: the same mirror has stalled this job before
-      - run: timeout --signal=TERM --kill-after=15 180 sudo sh -c 'apt-get update -qq && apt-get install -y bubblewrap'
+      - run: timeout --signal=TERM --kill-after=15 120 sudo sh -c 'apt-get update -qq && apt-get install -y bubblewrap'
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Chromium's headless shell for playwright-core, at the version it wants (the runner has the libraries it needs),
       # and WebKit, Safari's engine, for an iPhone's tests (layout-iphone.test.ts), with the libraries it needs
@@ -83,47 +83,19 @@ jobs:
       - if: steps.playwright.outputs.cache-hit != 'true'
         run: bun x playwright-core install --only-shell chromium && bun x playwright-core install webkit
       # The apt call inside install-deps stalls against the runner's mirror: a healthy one takes 18-39 s here, and one
-      # took 816 s without finishing, using up the 15-minute job before the tests could start. Each attempt is bounded by
-      # the observed time, nothing ever runs beside a package manager, and a failure is never skipped.
+      # took 816 s without finishing, using up the 15-minute job before the tests could start. One bounded attempt, and
+      # no dependency is ever skipped: a stall fails the check, and a fresh rerun is the answer (a rerun cannot start a
+      # second apt beside a privileged child of the first that this unprivileged step cannot reliably signal).
       - name: Browser system dependencies
-        timeout-minutes: 7
+        timeout-minutes: 5
         run: |
-          set -u
-          give_up() {
-            echo "::error::$1"
-            sudo tail -n 20 /var/log/apt/term.log || true
-            exit 1
-          }
-          # is a package manager running? 1 from pgrep means none; any other status is not "none", so it fails the step
-          pkg_running() {
-            local out st
-            if out=$(pgrep -af '(^|/)(apt|apt-get|dpkg)( |$)|unattended-upgrade'); then
-              printf '%s\n' "$out"
-              return 0
-            else
-              st=$?
-            fi
-            if [ "$st" = 1 ]; then return 1; fi
-            give_up "could not inspect the process table (pgrep exit $st)"
-          }
-
-          for attempt in 1 2; do
-            budget=$([ "$attempt" = 1 ] && echo 120 || echo 90)
-            if timeout --signal=TERM --kill-after=15 "$budget" bun x playwright-core install-deps webkit; then
-              echo "system dependencies installed on attempt $attempt"
-              exit 0
-            fi
-            echo "::warning::install-deps webkit failed or timed out on attempt $attempt"
-            if [ "$attempt" = 2 ]; then break; fi
-            # timeout signals the command's whole process group, so apt normally goes with it; if anything of it is
-            # still there, refuse to start a second one beside it rather than signal processes by name
-            if pkg_running; then
-              give_up 'a package manager from the failed attempt is still running; not starting another beside it'
-            fi
-            sudo timeout --kill-after=10 60 dpkg --configure -a \
-              || give_up 'dpkg --configure -a failed or timed out; the package database is not settled'
-          done
-          give_up 'playwright system dependencies were not installed in two bounded attempts'
+          if timeout --signal=TERM --kill-after=15 120 bun x playwright-core install-deps webkit; then
+            echo "system dependencies installed"
+            exit 0
+          fi
+          echo "::error::install-deps webkit failed or timed out; the runner's package mirror is likely stalled: rerun the job"
+          sudo tail -n 20 /var/log/apt/term.log || true
+          exit 1
       # the screen the browser tests open (test/web.ts), built from these files: a build of other files is left unused
       - uses: actions/cache@v4
         with:
