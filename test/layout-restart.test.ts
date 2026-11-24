@@ -104,7 +104,9 @@ describe.skipIf(!browser)('restarting an agent', () => {
         if (!save) expect(await sheet.getByRole('switch').count()).toBe(0)
         await sheet.getByRole('button', { name: /^Effort: / }).click()
         await page.getByRole('menuitemradio', { name: save ? 'Low' : 'High', exact: true }).click()
-        const toggle = sheet.getByRole('switch', { name: `Use for future ${task ? 'task agents' : 'coordinators'} in ${p.name}` })
+        // the sheet names the chat's own space: the task agent's is the task's space (gtm), the coordinator's its place
+        const space = task ? 'gtm' : p.name
+        const toggle = sheet.getByRole('switch', { name: `Use for future ${task ? 'task agents' : 'coordinators'} in ${space}` })
         expect(await toggle.getAttribute('aria-checked')).toBe('false')
         if (save) await toggle.click()
         await sheet.getByRole('button', { name: 'Restart', exact: true }).click()
