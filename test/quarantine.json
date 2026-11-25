@@ -1,17 +1,17 @@
 {
- "note": "Exact case-level quarantine. Blocking CI runs everything else; the diagnostic workflow runs these too. Remove an entry only when the case is fixed or reclassified. See quarantine-inventory.md.",
+ "note": "PLANNING ARTIFACT ONLY \u2014 not an implemented quarantine. The preload-based selector was rejected by review (bun's imported describe/test bindings bypass globals, and Bun.main cannot identify each file in a multi-file run), so nothing here filters a suite and nothing claims one is filtered. A sound implementation must switch the listed cases to an explicit per-case form in their own files. Inventory: /home/alvinla/shep-baseline-v211/quarantine-inventory.md (private, outside the repo).",
  "cases": [
   {
    "file": "test/background.test.ts",
    "name": "an agent whose turn ended > its session file says what still runs, else its screen; a change is told as a status change",
-   "disposition": "valid-defect",
-   "why": "the test is right and this tree's source breaks its own rule"
+   "disposition": "suspected-defect",
+   "why": "unproven: agents.ts:451 dereferences processInfo(pane) where :811 guards; alternate cause is an incomplete herdr fake \u2014 needs a run to decide"
   },
   {
    "file": "test/background.test.ts",
    "name": "an agent whose turn ended > shells alone keep it at work only so long: a server it started for you never wakes it",
-   "disposition": "valid-defect",
-   "why": "the test is right and this tree's source breaks its own rule"
+   "disposition": "suspected-defect",
+   "why": "unproven: agents.ts:451 dereferences processInfo(pane) where :811 guards; alternate cause is an incomplete herdr fake \u2014 needs a run to decide"
   },
   {
    "file": "test/design.test.ts",

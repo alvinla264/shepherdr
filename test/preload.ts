@@ -1,4 +1,3 @@
-import './quarantine-preload.ts'
 // Run before the tests in every checkout (bunfig.toml): a fresh worktree, or one whose lockfile moved since its last
 // install, gets its dependencies and plugin registries first, and plain bun test goes the fast way (scripts/test.ts).
 import { createHash } from 'node:crypto'
