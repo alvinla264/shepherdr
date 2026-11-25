@@ -19,8 +19,10 @@ for (const c of manifest.cases) {
   try { src = readFileSync(join(root, c.file), 'utf8') } catch { problems.push(`no such file: ${c.file}`); continue }
   // A title is either a literal in the file or built from a template (a loop over widths/themes, a place name). For a
   // template only its static prefix is visible here; the run-time `check` mode is what proves the exact name.
+  const flat = (x: string) => x.replace(/\s+/g, ' ').replace(/[’]/g, "'").trim()
+  const flatSrc = flat(src)
   const probe = (t: string) => {
-    if (src.includes(t)) return true
+    if (src.includes(t) || flatSrc.includes(flat(t))) return true
     const cut = Math.min(...[t.indexOf(' ('), t.indexOf('${')].filter((i) => i > 0).concat([t.length]))
     const prefix = t.slice(0, cut)
     return prefix.length >= 8 && src.includes(prefix)
