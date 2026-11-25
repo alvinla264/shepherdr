@@ -96,12 +96,10 @@ describe('claude reader', () => {
       'turn-end:turn-msg_B',
     ])
     expect(ev[0]).toMatchObject({ kind: 'session', sessionId: S })
-    // the reply keeps the log's own message id, and the turn ends once, on that id: read them by kind, not by
-    // position, since bookkeeping events (runtime, usage, steps) come and go with what a CLI logs
-    const said = ev.filter((e) => e.kind === 'agent')
-    expect(said.map((e) => e.text)).toContain('The button is blue now.\n\nThe footer looks fine.')
-    expect(said.at(-1)!.id).toBe('msg_B')
-    expect(ev.filter((e) => e.kind === 'turn-end').map((e) => e.id)).toEqual(['turn-msg_B'])
+    // the reply keeps the log's own message id: read it by kind, not by position, since bookkeeping events
+    // (runtime, usage, steps) come and go with what a CLI logs. The sequence above already pins its text, its
+    // order and the single turn-end.
+    expect(ev.filter((e) => e.kind === 'agent').at(-1)!.id).toBe('msg_B')
   })
 
   test('a command Claude Code runs itself reads as typed, with what it printed as its answer, and starts no turn', () => {
