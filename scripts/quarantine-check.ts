@@ -17,13 +17,16 @@ for (const c of manifest.cases) {
   const leaf = parts.at(-1)!
   let src = ''
   try { src = readFileSync(join(root, c.file), 'utf8') } catch { problems.push(`no such file: ${c.file}`); continue }
-  if (!src.includes(leaf)) problems.push(`leaf title not in ${c.file}: ${leaf}`)
-  let from = 0
-  for (const step of parts) {
-    const at = src.indexOf(step, from)
-    if (at < 0) { problems.push(`describe chain not in order in ${c.file}: ${step} (in ${c.name})`); break }
-    from = at + step.length
+  // A title is either a literal in the file or built from a template (a loop over widths/themes, a place name). For a
+  // template only its static prefix is visible here; the run-time `check` mode is what proves the exact name.
+  const probe = (t: string) => {
+    if (src.includes(t)) return true
+    const cut = Math.min(...[t.indexOf(' ('), t.indexOf('${')].filter((i) => i > 0).concat([t.length]))
+    const prefix = t.slice(0, cut)
+    return prefix.length >= 8 && src.includes(prefix)
   }
+  if (!probe(leaf)) problems.push(`leaf title not in ${c.file}: ${leaf}`)
+  for (const step of parts) if (!probe(step)) problems.push(`describe chain not in ${c.file}: ${step} (in ${c.name})`)
   if (!c.disposition || !c.why) problems.push(`entry without disposition or reason: ${c.name}`)
 }
 const files = new Set(manifest.cases.map((c) => c.file))
