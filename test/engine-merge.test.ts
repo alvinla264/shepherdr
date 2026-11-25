@@ -259,7 +259,9 @@ describe('closed with nothing to merge', () => {
     expect(w.engine.view(t).said).toBe('Not needed any more.')
     expect(existsSync(join(t.worktree!, 'wip.txt'))).toBe(true)
     expect(branches(dir)).toBe(t.branch!)
-    expect(w.engine.keptLeftovers()[0]).toStartWith(`${t.id} `)
+    // by its own task, not by position: every engine file shares one home (engine-world.ts sets SHEPHERDR_HOME once),
+    // so a leftover another test kept is in the same list and may sit first
+    expect(w.engine.keptLeftovers().filter((x) => x.startsWith(`${t.id} `))).toHaveLength(1)
     await w.engine.sweep()
     expect(existsSync(t.worktree!)).toBe(true)
   })
