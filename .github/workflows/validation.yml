@@ -1,0 +1,141 @@
+# Manual only (workflow_dispatch): one run that shows both verdicts side by side, because the blocking Check can no
+# longer show them together.
+#   maintained — the same three shards as Check, with SHEPHERDR_QUARANTINE=block: the 38 cases test/quarantine.json
+#                lists skip by name, everything else must pass. This is the evidence a merge decision can use.
+#   diagnostic — the whole suite with quarantine off: every listed case runs, so its current failure is visible and
+#                its verdict is the original suite's. Strict steps, no continue-on-error: a red here is a real result
+#                and a broken setup fails the job too, instead of masquerading as an expected test failure.
+# The jobs are independent, so a red diagnostic never hides the maintained evidence, and neither job gates a merge.
+# Ubuntu runners, read-only token, no secrets, no deploy, no release, no settings change.
+name: Validation (manual)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: validation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GIT_AUTHOR_NAME: CI
+  GIT_AUTHOR_EMAIL: ci@localhost
+  GIT_COMMITTER_NAME: CI
+  GIT_COMMITTER_EMAIL: ci@localhost
+  TIMINGS: node_modules/.cache/shepherdr-test/timings.json
+
+permissions:
+  contents: read
+
+jobs:
+  maintained:
+    name: maintained (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - id: playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-shell-webkit-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        run: bun x playwright-core install --only-shell chromium && bun x playwright-core install webkit
+      - run: bun x playwright-core install-deps webkit
+      - uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/shepherdr-test/dist-*
+          key: screen-maps-${{ hashFiles('index.html', 'vite.config.ts', 'tsconfig.json', 'package.json', 'bun.lock', 'plugins.json', 'src/**', 'plugins/**', 'shared/**', 'public/**') }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.TIMINGS }}
+          key: test-timings-${{ github.run_id }}
+          restore-keys: test-timings-
+      - id: suite
+        run: |
+          set -o pipefail
+          bun run test --shard=${{ matrix.shard }}/3 --map=screen-map.json 2>&1 | tee /tmp/maintained.log
+        env:
+          SHEPHERDR_QUARANTINE: block
+      - if: always()
+        run: |
+          {
+            echo "### maintained shard ${{ matrix.shard }}/3"
+            echo "test step: ${{ steps.suite.outcome }}"
+            if [ ! -s /tmp/maintained.log ]; then
+              echo "NO TEST RESULT: the suite never wrote a log, so this is a setup or infrastructure failure, not a test verdict."
+              exit 0
+            fi
+            grep -E '^ *[0-9]+ (pass|fail|skip)' /tmp/maintained.log | tail -3 || true
+            echo "quarantined lines: $(grep -c '^QUARANTINED' /tmp/maintained.log || true)"
+            grep '^QUARANTINED' /tmp/maintained.log | sed 's/^/- /' || true
+            echo "failures printed by name:"
+            grep '^(fail)' /tmp/maintained.log | sed 's/ \[.*//' | sort -u | sed 's/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-map-${{ matrix.shard }}
+          path: screen-map.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  diagnostic:
+    name: diagnostic (full suite, quarantine off)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - id: playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-shell-webkit-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - if: steps.playwright.outputs.cache-hit != 'true'
+        run: bun x playwright-core install --only-shell chromium && bun x playwright-core install webkit
+      - run: bun x playwright-core install-deps webkit
+      - uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/shepherdr-test/dist-*
+          key: screen-maps-${{ hashFiles('index.html', 'vite.config.ts', 'tsconfig.json', 'package.json', 'bun.lock', 'plugins.json', 'src/**', 'plugins/**', 'shared/**', 'public/**') }}
+      - id: suite
+        run: |
+          set -o pipefail
+          bun run test 2>&1 | tee /tmp/diagnostic.log
+        env:
+          SHEPHERDR_QUARANTINE: off
+      - if: always()
+        run: |
+          {
+            echo "### diagnostic: the original suite, quarantine off"
+            echo "test step: ${{ steps.suite.outcome }}"
+            if [ ! -s /tmp/diagnostic.log ]; then
+              echo "NO TEST RESULT: the suite never wrote a log, so this is a setup or infrastructure failure, not a test verdict."
+              exit 0
+            fi
+            grep -E '^ *[0-9]+ (pass|fail|skip)' /tmp/diagnostic.log | tail -3 || true
+            echo "quarantined lines (must be 0 in this mode): $(grep -c '^QUARANTINED' /tmp/diagnostic.log || true)"
+            echo "failing cases, by the name bun prints:"
+            grep '^(fail)' /tmp/diagnostic.log | sed 's/ \[.*//' | sort -u | sed 's/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
