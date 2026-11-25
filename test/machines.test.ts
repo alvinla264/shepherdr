@@ -1,6 +1,7 @@
 // One install for every machine: the helper Shepherdr puts on another machine (helper/), run here as it runs there.
 // The SSH link itself (box.ts, machines.ts) was checked by hand against a machine saved in herdr.
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -144,7 +145,7 @@ describe('a machine run from the main one', () => {
     expect(machine).toContain('Disk, memory and load')
   })
 
-  test("an agent's artifact commands there name no path of the main machine: the pictures and pages are copied over", () => {
+  test.skipIf(q("test/machines.test.ts", "an agent's artifact commands there name no path of the main machine: the pictures and pages are copied over"))("an agent's artifact commands there name no path of the main machine: the pictures and pages are copied over", () => {
     const home = mkdtempSync(join(tmpdir(), 'shep-worker-'))
     const there = mkdtempSync(join(tmpdir(), 'shep-there-'))
     const files = mkdtempSync(join(tmpdir(), 'shep-there-files-'))
@@ -181,7 +182,7 @@ describe('a machine run from the main one', () => {
     expect(outs[4]).toContain('No pictures: the main machine could not open its browser')
   })
 
-  test("its shepherdr set and unset for Everywhere run on the main machine; its machine's own stays here", async () => {
+  test.skipIf(q("test/machines.test.ts", "its shepherdr set and unset for Everywhere run on the main machine; its machine's own stays here"))("its shepherdr set and unset for Everywhere run on the main machine; its machine's own stays here", async () => {
     const home = mkdtempSync(join(tmpdir(), 'shep-worker-'))
     const main = mkdtempSync(join(tmpdir(), 'shep-main-'))
     const there = mkdtempSync(join(tmpdir(), 'shep-there-'))

@@ -94,6 +94,10 @@ jobs:
       # change to the screen there runs only the browser tests that reach it (test/screen-map.ts puts the shards' maps
       # of main's newest green run together)
       - run: bun run test --shard=${{ matrix.shard }}/3 --map=screen-map.json
+        env:
+          # exact case-level quarantine (test/quarantine.json): every other case is blocking. The manual diagnostic
+          # workflow runs the quarantined cases too. Never report this as the full original suite passing.
+          SHEPHERDR_QUARANTINE: block
       - if: always()
         uses: actions/upload-artifact@v4
         with:

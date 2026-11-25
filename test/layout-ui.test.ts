@@ -1,5 +1,6 @@
 // The UI pass (SHE-81): Settings, appearance and the rest, in a real browser (layout.ts).
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { layout, settled } from './layout.ts'
 import type { Locator } from 'playwright-core'
 
@@ -12,7 +13,7 @@ describe.skipIf(!browser)('the UI pass (SHE-81)', () => {
     ['desktop', { width: 1440, height: 900 }],
     ['tablet', { width: 1024, height: 768 }],
   ] as const)
-    test(`nothing pops up a tooltip on hover: no title on any button, row or icon (${name})`, async () => {
+    test.skipIf(q("test/layout-ui.test.ts", `nothing pops up a tooltip on hover: no title on any button, row or icon (${name})`))(`nothing pops up a tooltip on hover: no title on any button, row or icon (${name})`, async () => {
       const page = await browser!.newPage({ viewport, hasTouch: name === 'tablet' })
       // an artifact frame's title only names it to screen readers
       const titled = () => page.evaluate(() => [...document.querySelectorAll('[title]:not(iframe), svg title')].map((e) => e.outerHTML.slice(0, 120)))

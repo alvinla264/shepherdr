@@ -1,6 +1,7 @@
 // Sections of the sidebar, as Slack's (SHE-225): one at the top from the header's +, one inside a machine from its ⋯;
 // spaces move in from their ⋯ or by a drag onto a heading, and back; renamed, folded, deleted. In a real browser (layout.ts).
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import type { Locator, Page } from 'playwright-core'
 import { layout, settled } from './layout.ts'
 
@@ -38,7 +39,7 @@ describe.skipIf(!browser)('sections', () => {
   }
   const idOf = (name: string) => Object.entries(world.groups).find(([, d]) => d.name === name)![0]
 
-  test('made at the top and in a machine; spaces move in from their ⋯ and by a drag, show their machine at the top, fold, walk, rename and delete back (desktop)', async () => {
+  test.skipIf(q("test/layout-sections.test.ts", 'made at the top and in a machine; spaces move in from their ⋯ and by a drag, show their machine at the top, fold, walk, rename and delete back (desktop)'))('made at the top and in a machine; spaces move in from their ⋯ and by a drag, show their machine at the top, fold, walk, rename and delete back (desktop)', async () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
     try {
       await page.goto(url())

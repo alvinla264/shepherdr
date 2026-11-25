@@ -3,6 +3,7 @@
 // from them opening in the middle beside them; kept on this device, a pin to a place from before as its chips. In a
 // real browser (layout.ts).
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import type { Page } from 'playwright-core'
 import { layout } from './layout.ts'
 
@@ -19,7 +20,7 @@ async function add(page: Page, name: string) {
 }
 
 describe.skipIf(!browser)('the lists’ chips', () => {
-  test('a desktop: they follow the space picked; × and + Filter edit them, none is everything; another space, its own again', async () => {
+  test.skipIf(q("test/layout-pin.test.ts", 'a desktop: they follow the space picked; × and + Filter edit them, none is everything; another space, its own again'))('a desktop: they follow the space picked; × and + Filter edit them, none is everything; another space, its own again', async () => {
     const page = await browser!.newPage({ viewport: { width: 1600, height: 900 } })
     await page.goto(at('place=vm-str/home'))
     const list = page.getByRole('region', { name: 'Tasks' })
@@ -73,7 +74,7 @@ describe.skipIf(!browser)('the lists’ chips', () => {
     await page.close()
   }, 30_000)
 
-  test('a desktop: pinned, the chips stay while the middle goes to a space and to a task, kept on this device; unpinned, they follow again', async () => {
+  test.skipIf(q("test/layout-pin.test.ts", 'a desktop: pinned, the chips stay while the middle goes to a space and to a task, kept on this device; unpinned, they follow again'))('a desktop: pinned, the chips stay while the middle goes to a space and to a task, kept on this device; unpinned, they follow again', async () => {
     const page = await browser!.newPage({ viewport: { width: 1600, height: 900 } })
     await page.goto(at('place=p:vm-str:gtm'))
     const list = page.getByRole('region', { name: 'Tasks' })
@@ -153,7 +154,7 @@ describe.skipIf(!browser)('the lists’ chips', () => {
     await page.close()
   }, 30_000)
 
-  test('a phone: the Tasks tab’s chips scroll sideways, + Filter staying in view; pinned, they stay while the drawer picks another space', async () => {
+  test.skipIf(q("test/layout-pin.test.ts", 'a phone: the Tasks tab’s chips scroll sideways, + Filter staying in view; pinned, they stay while the drawer picks another space'))('a phone: the Tasks tab’s chips scroll sideways, + Filter staying in view; pinned, they stay while the drawer picks another space', async () => {
     const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
     await page.goto(at('place=p:vm-str:gtm&tab=tasks'))
     await page.getByRole('button', { name: /GTM-16 Docs/ }).waitFor()

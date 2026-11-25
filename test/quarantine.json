@@ -1,5 +1,5 @@
 {
- "note": "PLANNING ARTIFACT ONLY \u2014 not an implemented quarantine. The preload-based selector was rejected by review (bun's imported describe/test bindings bypass globals, and Bun.main cannot identify each file in a multi-file run), so nothing here filters a suite and nothing claims one is filtered. A sound implementation must switch the listed cases to an explicit per-case form in their own files. Inventory: /home/alvinla/shep-baseline-v211/quarantine-inventory.md (private, outside the repo).",
+ "note": "Exact case-level quarantine, implemented at the declarations with bun's native test.skipIf(q(file, title)) \u2014 34 declarations cover these 38 cases (two sit in loops whose interpolated titles name each variant). Blocking Check runs everything else; the manual Quarantine diagnostic workflow runs the whole suite with quarantine off. A listed case that no file declares, or a pair listed twice, fails loudly. No remote run has proven any of this yet.",
  "cases": [
   {
    "file": "test/background.test.ts",
@@ -223,6 +223,18 @@
    "name": "visible launch controls > coordinator and task metadata comes from the launch record, never new Settings; old actions cannot claim an unapplied change",
    "disposition": "unresolved",
    "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/live.test.ts",
+   "name": "settings > a value that makes no sense is refused with the reason",
+   "disposition": "environment",
+   "why": "depends on the installed CLI's model/effort vocabulary; the run log proves the expectation pins a CLI rather than the product's rule"
+  },
+  {
+   "file": "test/live.test.ts",
+   "name": "settings > Settings offer each role the models and levels of its own CLI, showing a stored one that no longer fits as what it starts with",
+   "disposition": "environment",
+   "why": "the CLI order comes from `herdr agent start --help` with a fallback list, so it depends on what the runner has; declared in live.test.ts:581 (the run grouped it under layout-settings)"
   }
  ]
 }

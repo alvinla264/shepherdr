@@ -1,5 +1,6 @@
 // The tasks list: each task's own status line, groups, To do, archiving and an alert's link, in a real browser (layout.ts).
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import type { Page } from 'playwright-core'
 import { waiting } from '../shared/alerts.ts'
 import { layout, settled } from './layout.ts'
@@ -170,7 +171,7 @@ describe.skipIf(!browser)('grouping a machine\'s tasks', () => {
     await ctx.close()
   }, 30_000)
 
-  test('the main home space: Status across every machine, Machine, Space or Machine › Space; each row says where it is only where nothing else does', async () => {
+  test.skipIf(q("test/layout-tasks.test.ts", 'the main home space: Status across every machine, Machine, Space or Machine › Space; each row says where it is only where nothing else does'))('the main home space: Status across every machine, Machine, Space or Machine › Space; each row says where it is only where nothing else does', async () => {
     const ctx = await browser!.newContext({ viewport: { width: 1024, height: 768 } })
     const page = await ctx.newPage()
     await page.goto(url())

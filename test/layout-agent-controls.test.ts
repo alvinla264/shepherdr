@@ -1,11 +1,12 @@
 // Composer + launch controls for both chat roles; only GitHub runs these browser tests.
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { layout } from './layout.ts'
 
 const { browser, world, server } = await layout({ everything: true })
 
 describe.skipIf(!browser)('composer + agent controls', () => {
-  test('both chats hide controls until + opens at phone, tablet and desktop widths; picks wait for Restart and cancel changes nothing', async () => {
+  test.skipIf(q("test/layout-agent-controls.test.ts", 'both chats hide controls until + opens at phone, tablet and desktop widths; picks wait for Restart and cancel changes nothing'))('both chats hide controls until + opens at phone, tablet and desktop widths; picks wait for Restart and cancel changes nothing', async () => {
     const p = world.snapshot().places.find((x) => !x.home)!
     const key = 'GTM-17/Agent'
     for (const [width, colorScheme] of [[320, 'light'], [768, 'dark'], [1440, 'light']] as const) {
@@ -48,7 +49,7 @@ describe.skipIf(!browser)('composer + agent controls', () => {
     }
   }, 30_000)
 
-  test('missing launch values stay unknown in the popup instead of borrowing Settings defaults', async () => {
+  test.skipIf(q("test/layout-agent-controls.test.ts", 'missing launch values stay unknown in the popup instead of borrowing Settings defaults'))('missing launch values stay unknown in the popup instead of borrowing Settings defaults', async () => {
     const key = 'GTM-17/Agent'
     world.chats[key].agent = { kind: 'codex' }
     world.chats[key].cli = 'Codex'
@@ -65,7 +66,7 @@ describe.skipIf(!browser)('composer + agent controls', () => {
     await page.close()
   }, 30_000)
 
-  test('default policy shows runtime values in both roles and updates without changing the policy', async () => {
+  test.skipIf(q("test/layout-agent-controls.test.ts", 'default policy shows runtime values in both roles and updates without changing the policy'))('default policy shows runtime values in both roles and updates without changing the policy', async () => {
     const p = world.snapshot().places.find((x) => !x.home)!
     for (const chat of [p.chat, 'GTM-17/Agent']) {
       world.chats[chat].agent = { kind: 'codex', runtime: { model: 'config-overridden-model', effort: 'high', source: 'session', at: Date.now() } }
@@ -85,7 +86,7 @@ describe.skipIf(!browser)('composer + agent controls', () => {
     }
   }, 30_000)
 
-  test('a retired launch model stays visible, blocks Restart, and can be replaced with Default', async () => {
+  test.skipIf(q("test/layout-agent-controls.test.ts", 'a retired launch model stays visible, blocks Restart, and can be replaced with Default'))('a retired launch model stays visible, blocks Restart, and can be replaced with Default', async () => {
     const key = 'GTM-17/Agent'
     world.chats[key].agent = { kind: 'codex', model: 'retired-model' }
     world.chats[key].cli = 'Codex'

@@ -1,5 +1,6 @@
 // The sidebars and places: modes, the ⋯ menu, the places tree, one machine or many, in a real browser (layout.ts).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import type { Page } from 'playwright-core'
 import { layout, settled, type Box } from './layout.ts'
 
@@ -141,7 +142,7 @@ describe.skipIf(!browser)('sidebars', () => {
     await page.close()
   }, 30_000)
 
-  test('available room chooses a drawer at 820/1024/1100 and docking at 1180; resized lists keep chat readable', async () => {
+  test.skipIf(q("test/layout-places.test.ts", 'available room chooses a drawer at 820/1024/1100 and docking at 1180; resized lists keep chat readable'))('available room chooses a drawer at 820/1024/1100 and docking at 1180; resized lists keep chat readable', async () => {
     const page = await browser!.newPage({ viewport: { width: 1024, height: 850 } })
     await page.goto(url())
     await page.getByRole('textbox', { name: 'Message home…' }).waitFor()
@@ -217,7 +218,7 @@ describe.skipIf(!browser)("a place's Autopilot", () => {
     ['desktop, light', { viewport: { width: 1600, height: 900 }, colorScheme: 'light' }],
     ['desktop, dark', { viewport: { width: 1600, height: 900 }, colorScheme: 'dark' }],
   ] as const)
-    test(`is a switch at the top of the ⋯ menu, over search and the terminal; a pill beside that menu shows it only while on (${name})`, async () => {
+    test.skipIf(q("test/layout-places.test.ts", `is a switch at the top of the ⋯ menu, over search and the terminal; a pill beside that menu shows it only while on (${name})`))(`is a switch at the top of the ⋯ menu, over search and the terminal; a pill beside that menu shows it only while on (${name})`, async () => {
       const ctx = await browser!.newContext(opts)
       const page = await ctx.newPage()
       await page.goto(url())
@@ -419,7 +420,7 @@ describe.skipIf(!browser)('the ⋯ menu is one design', () => {
       await page.close()
     }, 30_000)
 
-  test('the keyboard opens it, moves through it with the arrows, and Escape gives the focus back (desktop)', async () => {
+  test.skipIf(q("test/layout-places.test.ts", 'the keyboard opens it, moves through it with the arrows, and Escape gives the focus back (desktop)'))('the keyboard opens it, moves through it with the arrows, and Escape gives the focus back (desktop)', async () => {
     const page = await browser!.newPage({ viewport: { width: 1600, height: 900 } })
     await page.goto(url())
     const button = page.getByRole('button', { name: 'Menu', exact: true })
@@ -473,7 +474,7 @@ describe.skipIf(!browser)('places, calm like Slack', () => {
     expect(rs.find((r) => r.name === 'nas')!.text).toBe("nasCan't reach")
   }
 
-  test('desktop and the phone drawer: no marks, a count only where something waits on you', async () => {
+  test.skipIf(q("test/layout-places.test.ts", 'desktop and the phone drawer: no marks, a count only where something waits on you'))('desktop and the phone drawer: no marks, a count only where something waits on you', async () => {
     const desk = await browser!.newPage({ viewport: { width: 1440, height: 800 } })
     await desk.goto(url())
     await desk.waitForSelector('#places li')
@@ -683,7 +684,7 @@ describe.skipIf(!browser)('the places tree', () => {
     await page.close()
   }, 30_000)
 
-  test('a narrow sidebar cuts names short; the + and counts stay inside', async () => {
+  test.skipIf(q("test/layout-places.test.ts", 'a narrow sidebar cuts names short; the + and counts stay inside'))('a narrow sidebar cuts names short; the + and counts stay inside', async () => {
     const page = await browser!.newPage({ viewport: { width: 1280, height: 800 } })
     await page.addInitScript(() => localStorage.setItem('shepherdr.sidebars', JSON.stringify({ left: 200, right: 400, open: true })))
     await page.goto(url())

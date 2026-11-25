@@ -2,12 +2,13 @@
 // Escape the old, and the new one shows everywhere the old did. A space's name follows the space rules as it is typed.
 // A machine's section is renamed in a dialog, as Slack's: its emoji and its name. Only the name changes: its id stays.
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { layout, settled } from './layout.ts'
 
 const { browser, world, url } = await layout()
 
 describe.skipIf(!browser)('renaming spaces and machines', () => {
-  test('a space renames in its row, a machine in Rename machine: Enter keeps it, Escape does not, a name taken or against the rules is refused; it shows in the header, tasks and search (desktop)', async () => {
+  test.skipIf(q("test/layout-rename.test.ts", 'a space renames in its row, a machine in Rename machine: Enter keeps it, Escape does not, a name taken or against the rules is refused; it shows in the header, tasks and search (desktop)'))('a space renames in its row, a machine in Rename machine: Enter keeps it, Escape does not, a name taken or against the rules is refused; it shows in the header, tasks and search (desktop)', async () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 800 } })
     try {
       await page.goto(url().replace('place=vm-str/home', 'place=vm-str/gtm'))

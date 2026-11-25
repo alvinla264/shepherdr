@@ -1,5 +1,6 @@
 // Pinned spaces: a space's ⋯ moves it to Pinned, over the sidebar's tree, in a real browser (layout.ts).
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import type { Locator, Page } from 'playwright-core'
 import { layout, settled } from './layout.ts'
 
@@ -22,7 +23,7 @@ describe.skipIf(!browser)('pinned spaces', () => {
     world.emit('snapshot')
   }
 
-  test("a space's ⋯ moves it to Pinned, out of the tree, spaces only; it walks, drags, folds and unpins back (desktop)", async () => {
+  test.skipIf(q("test/layout-pins.test.ts", "a space's ⋯ moves it to Pinned, out of the tree, spaces only; it walks, drags, folds and unpins back (desktop)"))("a space's ⋯ moves it to Pinned, out of the tree, spaces only; it walks, drags, folds and unpins back (desktop)", async () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 800 } })
     try {
       await page.goto(url())

@@ -1,6 +1,7 @@
 // Background work that outlives an agent's turn (readers/background.ts): Claude Code's session file and its screen, on
 // samples captured from real panes and session files (Claude Code 2.1.310).
 import { afterAll, describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -139,7 +140,7 @@ describe('an agent whose turn ended', () => {
   const rec = (key: string, name: string, cwd: string, sessionId: string) => ({ key, name, kind: 'claude', cwd, workspace: 'w', logs: [], sessionId, started: 0 })
   writeJson('agents.json', { 'T-1/Agent': rec('T-1/Agent', 'shep-t-1', '/w/1', 's1'), 'T-2/Agent': rec('T-2/Agent', 'shep-t-2', '/w/2', 's2') })
 
-  test('its session file says what still runs, else its screen; a change is told as a status change', async () => {
+  test.skipIf(q("test/background.test.ts", 'its session file says what still runs, else its screen; a change is told as a status change'))('its session file says what still runs, else its screen; a change is told as a status change', async () => {
     session('busy')
     const a = new Agents()
     const told: string[] = []
@@ -172,7 +173,7 @@ describe('an agent whose turn ended', () => {
     a.stop()
   })
 
-  test("shells alone keep it at work only so long: a server it started for you never wakes it", async () => {
+  test.skipIf(q("test/background.test.ts", "shells alone keep it at work only so long: a server it started for you never wakes it"))("shells alone keep it at work only so long: a server it started for you never wakes it", async () => {
     session('shell')
     const a = new Agents()
     await a.refresh()

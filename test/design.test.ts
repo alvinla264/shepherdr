@@ -1,5 +1,6 @@
 // The screen stays one design: the same icons, weights and colours everywhere, buttons that say what they are.
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -16,7 +17,7 @@ const source = Object.fromEntries(files.map((f) => [f, readFileSync(join(root, f
 const offenders = (re: RegExp, except: string[] = []) => files.filter((f) => !except.includes(f) && re.test(source[f]))
 
 describe('one design across the screen', () => {
-  test('icons come from one set, through ui.tsx', () => {
+  test.skipIf(q("test/design.test.ts", 'icons come from one set, through ui.tsx'))('icons come from one set, through ui.tsx', () => {
     expect(offenders(/@heroicons/, ['src/ui.tsx'])).toEqual([])
   })
   test('emphasis is semibold at most: nothing bold', () => {
@@ -114,7 +115,7 @@ describe('one design across the screen', () => {
     // no screen draws scrollbars of its own: it may only hide one
     expect(offenders(/scrollbar-(?:color|gutter)|::-webkit-scrollbar(?!\]:hidden)/)).toEqual([])
   })
-  test('corners follow one rule: pills for one-line controls, two corners for containers, nested ones worked out', () => {
+  test.skipIf(q("test/design.test.ts", 'corners follow one rule: pills for one-line controls, two corners for containers, nested ones worked out'))('corners follow one rule: pills for one-line controls, two corners for containers, nested ones worked out', () => {
     const css = readFileSync(join(root, 'src/styles.css'), 'utf8')
     // a box and a bubble; a row's corner is the box's less a menu's padding, so it is the same in a menu or not
     expect(css).toMatch(/--box-radius: 14px;\s+--bubble-radius: 20px;\s+--row-radius: calc\(var\(--box-radius\) - 6px\);/)

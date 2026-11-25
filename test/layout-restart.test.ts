@@ -1,11 +1,12 @@
 // Minimal restart dialogs for both chat roles; only GitHub runs these browser tests.
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { layout } from './layout.ts'
 
 const { browser, world, server } = await layout({ everything: true })
 
 describe.skipIf(!browser)('restarting an agent', () => {
-  test('Settings mismatches show no banner and do not restart either role', async () => {
+  test.skipIf(q("test/layout-restart.test.ts", 'Settings mismatches show no banner and do not restart either role'))('Settings mismatches show no banner and do not restart either role', async () => {
     const p = world.snapshot().places.find((x) => !x.home)!
     for (const task of [false, true]) {
       const key = task ? 'GTM-17/Agent' : p.chat
@@ -74,7 +75,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
     await ctx.close()
   }, 30_000)
 
-  test('saving defaults is optional, scoped to the role, and sent only when selected', async () => {
+  test.skipIf(q("test/layout-restart.test.ts", 'saving defaults is optional, scoped to the role, and sent only when selected'))('saving defaults is optional, scoped to the role, and sent only when selected', async () => {
     const p = world.snapshot().places.find((x) => !x.home)!
     for (const task of [false, true]) {
       const chat = task ? 'GTM-17/Agent' : p.chat

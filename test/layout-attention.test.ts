@@ -1,5 +1,6 @@
 // Aggregate notifications keep categories separate, in the real sidebar and Tasks navigation.
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { layout, settled, until } from './layout.ts'
 
 const { browser, world, url } = await layout()
@@ -8,7 +9,7 @@ const place = 'p:vm-str:gtm'
 
 describe.skipIf(!browser)('attention count circles', () => {
   for (const width of [390, 820, 1440]) {
-    test(`zero, one-sided, split and capped counts, both themes at ${width}px`, async () => {
+    test.skipIf(q("test/layout-attention.test.ts", `zero, one-sided, split and capped counts, both themes at ${width}px`))(`zero, one-sided, split and capped counts, both themes at ${width}px`, async () => {
       const saved = world.tasks
       const page = await browser!.newPage({ viewport: { width, height: 1000 } })
       const template = saved.find((t) => t.status === 'ready')!

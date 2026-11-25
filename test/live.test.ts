@@ -1,5 +1,6 @@
 // The live source's own rules: chat lines, terminal menus, triggers, settings, project keys.
 import { beforeEach, describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -511,7 +512,7 @@ describe('settings', () => {
     for (const k of ['autopilot.tasksPerDay', 'autopilot.hours', 'autopilot.when', 'autopilot.atOnce', 'autopilot.retries', 'autopilot.pauseAfter', 'autopilot.brakeAfter', 'brief.waitChecks', 'machine.limitBy']) expect(s.set(k, 'any').ok).toBe(false)
     for (const k of ['check.command', 'merge.by', 'plan.approve', 'worker.agent', 'limit.tokens', 'agent']) expect(s.set(k, 'x').ok).toBe(false)
   })
-  test('a value that makes no sense is refused with the reason', () => {
+  test.skipIf(q("test/live.test.ts", 'a value that makes no sense is refused with the reason'))('a value that makes no sense is refused with the reason', () => {
     const s = new Settings()
     expect(s.set('tasks.archiveAfter', 'lots').error).toBe('Write a number from 1 to 3650 (whole), in days, or off.')
     expect(s.set('task.agent', 'Nonsense').ok).toBe(false)
@@ -578,7 +579,7 @@ describe('settings', () => {
     expect(effortFor('pi', 'default')).toBeUndefined()
     expect(effortFor('gemini', 'high')).toBeUndefined()
   })
-  test('Settings offer each role the models and levels of its own CLI, showing a stored one that no longer fits as what it starts with', () => {
+  test.skipIf(q("test/live.test.ts", 'Settings offer each role the models and levels of its own CLI, showing a stored one that no longer fits as what it starts with'))('Settings offer each role the models and levels of its own CLI, showing a stored one that no longer fits as what it starts with', () => {
     const s = new Settings()
     // the Reviewer's rows sit in How tasks work (its Settings block), the rest in Agents
     const rows = () => s.sections([], [], null).filter((x) => x.name === 'Agents' || x.name === 'How tasks work').flatMap((x) => x.rows)

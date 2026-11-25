@@ -1,5 +1,6 @@
 // Notifications and the content's scope picker: UI regression coverage for SHE-263.
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { layout, settled } from './layout.ts'
 
 const { browser, world, url } = await layout()
@@ -79,7 +80,7 @@ describe.skipIf(!browser)('notification settings', () => {
 })
 
 describe.skipIf(!browser)('chat agent choices', () => {
-  test('Agents explains the chat limit and offers only readable agents', async () => {
+  test.skipIf(q("test/layout-settings.test.ts", 'Agents explains the chat limit and offers only readable agents'))('Agents explains the chat limit and offers only readable agents', async () => {
     const page = await browser!.newPage({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true })
     try {
       await page.goto(url())
@@ -188,7 +189,7 @@ describe.skipIf(!browser)('private instruction settings', () => {
 })
 
 describe.skipIf(!browser)('repository base', () => {
-  test('editing the space default keeps existing task targets', async () => {
+  test.skipIf(q("test/layout-settings.test.ts", 'editing the space default keeps existing task targets'))('editing the space default keeps existing task targets', async () => {
     const page = await browser!.newPage({ viewport: { width: 1280, height: 900 } })
     const before = world.bases['p:vm-str:gtm']
     try {

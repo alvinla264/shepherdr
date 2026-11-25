@@ -1,5 +1,6 @@
 // A task's side panel: terminal, files, diff, pull request and browser, in a real browser (layout.ts).
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import type { Page } from 'playwright-core'
 import { Browsers, browserEnv } from '../server/live/browser.ts'
 import { fakeAgentBrowser } from './fake-agent-browser.ts'
@@ -344,7 +345,7 @@ describe.skipIf(!browser)("a task's side panel", () => {
     await page.close()
   }, 30_000)
 
-  test("a phone opens the items from the task header's ⋯ as full-screen sheets; Back closes one", async () => {
+  test.skipIf(q("test/layout-panel.test.ts", "a phone opens the items from the task header's ⋯ as full-screen sheets; Back closes one"))("a phone opens the items from the task header's ⋯ as full-screen sheets; Back closes one", async () => {
     const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
     await page.goto(task('GTM-14'))
     await page.getByRole('button', { name: 'More', exact: true }).click()

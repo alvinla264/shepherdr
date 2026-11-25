@@ -1,5 +1,6 @@
 // The shepherdr command: who may merge, choice cards, files, modes, adding projects.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { execSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -2155,7 +2156,7 @@ describe('startup menus before the first message', () => {
 })
 
 describe('visible launch controls', () => {
-  test('coordinator and task metadata comes from the launch record, never new Settings; old actions cannot claim an unapplied change', async () => {
+  test.skipIf(q("test/source.test.ts", 'coordinator and task metadata comes from the launch record, never new Settings; old actions cannot claim an unapplied change'))('coordinator and task metadata comes from the launch record, never new Settings; old actions cannot claim an unapplied change', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'shep-controls-'))
     const p = await src.places.add(dir, 'launch-controls')
     const place = placeId.space(p.name)

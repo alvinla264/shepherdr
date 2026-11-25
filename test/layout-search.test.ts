@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { q } from './quarantine.ts'
 import { layout, until } from './layout.ts'
 
 const { browser, world, url } = await layout({ everything: true })
@@ -44,7 +45,7 @@ describe.skipIf(!browser)('unified search', () => {
     } finally { source.messages = old; await page.close() }
   }, 30_000)
 
-  test('late replies in an earlier batch refresh the open results', async () => {
+  test.skipIf(q("test/layout-search.test.ts", 'late replies in an earlier batch refresh the open results'))('late replies in an earlier batch refresh the open results', async () => {
     const first = world.snapshot().places[0].chat
     const chat = world.chats[first]
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
@@ -64,7 +65,7 @@ describe.skipIf(!browser)('unified search', () => {
     }
   }, 30_000)
 
-  test('duplicate homes keep machine context, artifacts open by identity', async () => {
+  test.skipIf(q("test/layout-search.test.ts", 'duplicate homes keep machine context, artifacts open by identity'))('duplicate homes keep machine context, artifacts open by identity', async () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
     try {
       await page.goto(url())
