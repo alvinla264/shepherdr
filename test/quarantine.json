@@ -1,0 +1,221 @@
+{
+ "note": "Exact case-level quarantine. Blocking CI runs everything else; the diagnostic workflow runs these too. Remove an entry only when the case is fixed or reclassified. See quarantine-inventory.md.",
+ "cases": [
+  {
+   "file": "test/background.test.ts",
+   "name": "an agent whose turn ended > its session file says what still runs, else its screen; a change is told as a status change",
+   "disposition": "valid-defect",
+   "why": "the test is right and this tree's source breaks its own rule"
+  },
+  {
+   "file": "test/background.test.ts",
+   "name": "an agent whose turn ended > shells alone keep it at work only so long: a server it started for you never wakes it",
+   "disposition": "valid-defect",
+   "why": "the test is right and this tree's source breaks its own rule"
+  },
+  {
+   "file": "test/design.test.ts",
+   "name": "one design across the screen > corners follow one rule: pills for one-line controls, two corners for containers, nested ones worked out",
+   "disposition": "valid-defect",
+   "why": "the test is right and this tree's source breaks its own rule"
+  },
+  {
+   "file": "test/design.test.ts",
+   "name": "one design across the screen > icons come from one set, through ui.tsx",
+   "disposition": "valid-defect",
+   "why": "the test is right and this tree's source breaks its own rule"
+  },
+  {
+   "file": "test/layout-agent-controls.test.ts",
+   "name": "composer + agent controls > a retired launch model stays visible, blocks Restart, and can be replaced with Default",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-agent-controls.test.ts",
+   "name": "composer + agent controls > both chats hide controls until + opens at phone, tablet and desktop widths; picks wait for Restart and cancel changes nothing",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-agent-controls.test.ts",
+   "name": "composer + agent controls > default policy shows runtime values in both roles and updates without changing the policy",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-agent-controls.test.ts",
+   "name": "composer + agent controls > missing launch values stay unknown in the popup instead of borrowing Settings defaults",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-attention.test.ts",
+   "name": "attention count circles > zero, one-sided, split and capped counts, both themes at 1440px",
+   "disposition": "valid-defect",
+   "why": "the test is right and this tree's source breaks its own rule"
+  },
+  {
+   "file": "test/layout-panel.test.ts",
+   "name": "a task's side panel > a phone opens the items from the task header's \u22ef as full-screen sheets; Back closes one",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-pin.test.ts",
+   "name": "the lists\u2019 chips > a desktop: pinned, the chips stay while the middle goes to a space and to a task, kept on this device; unpinned, they follow again",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-pin.test.ts",
+   "name": "the lists\u2019 chips > a desktop: they follow the space picked; \u00d7 and + Filter edit them, none is everything; another space, its own again",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-pin.test.ts",
+   "name": "the lists\u2019 chips > a phone: the Tasks tab\u2019s chips scroll sideways, + Filter staying in view; pinned, they stay while the drawer picks another space",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-pins.test.ts",
+   "name": "pinned spaces > a space's \u22ef moves it to Pinned, out of the tree, spaces only; it walks, drags, folds and unpins back (desktop)",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-places.test.ts",
+   "name": "a place's Autopilot > is a switch at the top of the \u22ef menu, over search and the terminal; a pill beside that menu shows it only while on (desktop, dark)",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-places.test.ts",
+   "name": "a place's Autopilot > is a switch at the top of the \u22ef menu, over search and the terminal; a pill beside that menu shows it only while on (desktop, light)",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-places.test.ts",
+   "name": "a place's Autopilot > is a switch at the top of the \u22ef menu, over search and the terminal; a pill beside that menu shows it only while on (phone, dark)",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-places.test.ts",
+   "name": "a place's Autopilot > is a switch at the top of the \u22ef menu, over search and the terminal; a pill beside that menu shows it only while on (phone, light)",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-places.test.ts",
+   "name": "places, calm like Slack > desktop and the phone drawer: no marks, a count only where something waits on you",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-places.test.ts",
+   "name": "sidebars > available room chooses a drawer at 820/1024/1100 and docking at 1180; resized lists keep chat readable",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-places.test.ts",
+   "name": "the \u22ef menu is one design > the keyboard opens it, moves through it with the arrows, and Escape gives the focus back (desktop)",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-places.test.ts",
+   "name": "the places tree > a narrow sidebar cuts names short; the + and counts stay inside",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-rename.test.ts",
+   "name": "renaming spaces and machines > a space renames in its row, a machine in Rename machine: Enter keeps it, Escape does not, a name taken or against the rules is refused; it shows in the header, tasks and search (desktop)",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-restart.test.ts",
+   "name": "restarting an agent > saving defaults is optional, scoped to the role, and sent only when selected",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-restart.test.ts",
+   "name": "restarting an agent > Settings mismatches show no banner and do not restart either role",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-search.test.ts",
+   "name": "unified search > duplicate homes keep machine context, artifacts open by identity",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-search.test.ts",
+   "name": "unified search > late replies in an earlier batch refresh the open results",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-sections.test.ts",
+   "name": "sections > made at the top and in a machine; spaces move in from their \u22ef and by a drag, show their machine at the top, fold, walk, rename and delete back (desktop)",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-settings.test.ts",
+   "name": "chat agent choices > Agents explains the chat limit and offers only readable agents",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-settings.test.ts",
+   "name": "repository base > editing the space default keeps existing task targets",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-tasks.test.ts",
+   "name": "grouping a machine's tasks > the main home space: Status across every machine, Machine, Space or Machine \u203a Space; each row says where it is only where nothing else does",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/layout-ui.test.ts",
+   "name": "the UI pass (SHE-81) > nothing pops up a tooltip on hover: no title on any button, row or icon (desktop)",
+   "disposition": "valid-defect",
+   "why": "the test is right and this tree's source breaks its own rule"
+  },
+  {
+   "file": "test/layout-ui.test.ts",
+   "name": "the UI pass (SHE-81) > nothing pops up a tooltip on hover: no title on any button, row or icon (tablet)",
+   "disposition": "valid-defect",
+   "why": "the test is right and this tree's source breaks its own rule"
+  },
+  {
+   "file": "test/machines.test.ts",
+   "name": "a machine run from the main one > an agent's artifact commands there name no path of the main machine: the pictures and pages are copied over",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/machines.test.ts",
+   "name": "a machine run from the main one > its shepherdr set and unset for Everywhere run on the main machine; its machine's own stays here",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  },
+  {
+   "file": "test/source.test.ts",
+   "name": "visible launch controls > coordinator and task metadata comes from the launch record, never new Settings; old actions cannot claim an unapplied change",
+   "disposition": "unresolved",
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+  }
+ ]
+}
