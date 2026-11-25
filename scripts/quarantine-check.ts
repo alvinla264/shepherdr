@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 const root = join(import.meta.dir, '..')
 const manifest = JSON.parse(readFileSync(join(root, 'test/quarantine.json'), 'utf8')) as {
-  cases: { file: string; name: string; disposition: string; why: string }[]
+  cases: { file: string; name: string; disposition: string; why: string; dynamic?: boolean }[]
 }
 const seen = new Set<string>()
 const problems: string[] = []
@@ -20,15 +20,30 @@ for (const c of manifest.cases) {
   // A title is either a literal in the file or built from a template (a loop over widths/themes, a place name). For a
   // template only its static prefix is visible here; the run-time `check` mode is what proves the exact name.
   const flat = (x: string) => x.replace(/\s+/g, ' ').replace(/[’]/g, "'").trim()
-  const flatSrc = flat(src)
-  const probe = (t: string) => {
-    if (src.includes(t) || flatSrc.includes(flat(t))) return true
+  const flatSrc = flat(src).replace(/\\'/g, "'")
+  // exact means the finished title (or its describe chain) appears in the file, whitespace-normalised and with the
+  // source's escaped apostrophes folded. template means the title is built in a loop or a `${}` literal, where only
+  // its static prefix can appear; such an entry must say "dynamic": true, and the run-time check mode proves the
+  // exact interpolated name or fails the file. A prefix match without that flag is a problem, so a typo cannot hide.
+  const state = (t: string): 'exact' | 'template' | 'missing' => {
+    if (src.includes(t) || flatSrc.includes(flat(t))) return 'exact'
+    // a loop or `${}` title: the file holds its static words up to the interpolation, so try every word boundary
+    const words = flat(t).split(' ')
+    for (let n = words.length; n >= 2; n--) {
+      const prefix = words.slice(0, n).join(' ')
+      if (prefix.length < 8) break
+      if (flatSrc.includes(prefix + '${')) return 'template'
+    }
     const cut = Math.min(...[t.indexOf(' ('), t.indexOf('${')].filter((i) => i > 0).concat([t.length]))
     const prefix = t.slice(0, cut)
-    return prefix.length >= 8 && src.includes(prefix)
+    if (prefix.length >= 8 && flatSrc.includes(flat(prefix))) return 'template'
+    return 'missing'
   }
-  if (!probe(leaf)) problems.push(`leaf title not in ${c.file}: ${leaf}`)
-  for (const step of parts) if (!probe(step)) problems.push(`describe chain not in ${c.file}: ${step} (in ${c.name})`)
+  for (const step of parts) {
+    const how = state(step)
+    if (how === 'missing') { problems.push(`title not in ${c.file}: ${step} (in ${c.name})`); break }
+    if (how === 'template' && !c.dynamic) { problems.push(`template-built title needs "dynamic": true — ${step} (in ${c.name})`); break }
+  }
   if (!c.disposition || !c.why) problems.push(`entry without disposition or reason: ${c.name}`)
 }
 const files = new Set(manifest.cases.map((c) => c.file))

@@ -53,7 +53,8 @@
    "file": "test/layout-attention.test.ts",
    "name": "attention count circles > zero, one-sided, split and capped counts, both themes at 1440px",
    "disposition": "valid-defect",
-   "why": "the test is right and this tree's source breaks its own rule"
+   "why": "the test is right and this tree's source breaks its own rule",
+   "dynamic": true
   },
   {
    "file": "test/layout-panel.test.ts",
@@ -89,25 +90,29 @@
    "file": "test/layout-places.test.ts",
    "name": "a place's Autopilot > is a switch at the top of the \u22ef menu, over search and the terminal; a pill beside that menu shows it only while on (desktop, dark)",
    "disposition": "unresolved",
-   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report",
+   "dynamic": true
   },
   {
    "file": "test/layout-places.test.ts",
    "name": "a place's Autopilot > is a switch at the top of the \u22ef menu, over search and the terminal; a pill beside that menu shows it only while on (desktop, light)",
    "disposition": "unresolved",
-   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report",
+   "dynamic": true
   },
   {
    "file": "test/layout-places.test.ts",
    "name": "a place's Autopilot > is a switch at the top of the \u22ef menu, over search and the terminal; a pill beside that menu shows it only while on (phone, dark)",
    "disposition": "unresolved",
-   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report",
+   "dynamic": true
   },
   {
    "file": "test/layout-places.test.ts",
    "name": "a place's Autopilot > is a switch at the top of the \u22ef menu, over search and the terminal; a pill beside that menu shows it only while on (phone, light)",
    "disposition": "unresolved",
-   "why": "stale-vs-defect not decidable from the run log; see the inventory report"
+   "why": "stale-vs-defect not decidable from the run log; see the inventory report",
+   "dynamic": true
   },
   {
    "file": "test/layout-places.test.ts",
@@ -191,13 +196,15 @@
    "file": "test/layout-ui.test.ts",
    "name": "the UI pass (SHE-81) > nothing pops up a tooltip on hover: no title on any button, row or icon (desktop)",
    "disposition": "valid-defect",
-   "why": "the test is right and this tree's source breaks its own rule"
+   "why": "the test is right and this tree's source breaks its own rule",
+   "dynamic": true
   },
   {
    "file": "test/layout-ui.test.ts",
    "name": "the UI pass (SHE-81) > nothing pops up a tooltip on hover: no title on any button, row or icon (tablet)",
    "disposition": "valid-defect",
-   "why": "the test is right and this tree's source breaks its own rule"
+   "why": "the test is right and this tree's source breaks its own rule",
+   "dynamic": true
   },
   {
    "file": "test/machines.test.ts",
