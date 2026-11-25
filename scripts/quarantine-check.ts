@@ -32,7 +32,7 @@ for (const c of manifest.cases) {
     for (let n = words.length; n >= 2; n--) {
       const prefix = words.slice(0, n).join(' ')
       if (prefix.length < 8) break
-      if (flatSrc.includes(prefix + '${')) return 'template'
+      if (flatSrc.includes(prefix + '${') || flatSrc.includes(prefix + ' ${')) return 'template'
     }
     const cut = Math.min(...[t.indexOf(' ('), t.indexOf('${')].filter((i) => i > 0).concat([t.length]))
     const prefix = t.slice(0, cut)
