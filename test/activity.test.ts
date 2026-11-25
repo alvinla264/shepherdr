@@ -264,6 +264,9 @@ function world(kind: 'claude' | 'codex', status: () => string, runs: () => strin
     // live (agents.ts:322-325). These fixtures record no agent info, so the class itself would answer undefined;
     // the fake answers the same instead of throwing.
     runtime: () => undefined,
+    // agents.runtimeHook(key): runtime fields the main Claude process reports through its hooks, and only for a
+    // record with hooks whose live agent info is present (agents.ts:352-357). No such record here, so undefined.
+    runtimeHook: () => undefined,
   }
   const chats = new Chats(agents as never, (k) => k, () => 'You')
   const add = (...objs: object[]) => appendFileSync(log, objs.map((o) => `${JSON.stringify(o)}\n`).join(''))
