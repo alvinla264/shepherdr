@@ -260,6 +260,10 @@ function world(kind: 'claude' | 'codex', status: () => string, runs: () => strin
     failedLately: () => [],
     holdOf: () => undefined,
     info: () => undefined,
+    // agents.runtime(key): the codex runtime the reader last saw, answered only while info(key) says the agent is
+    // live (agents.ts:322-325). These fixtures record no agent info, so the class itself would answer undefined;
+    // the fake answers the same instead of throwing.
+    runtime: () => undefined,
   }
   const chats = new Chats(agents as never, (k) => k, () => 'You')
   const add = (...objs: object[]) => appendFileSync(log, objs.map((o) => `${JSON.stringify(o)}\n`).join(''))
