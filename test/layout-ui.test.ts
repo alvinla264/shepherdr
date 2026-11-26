@@ -402,6 +402,18 @@ describe.skipIf(!browser)('the UI pass (SHE-81)', () => {
     await words('All news').waitFor()
     const doc = pilot.getByRole('textbox', { name: 'Checklist' })
     expect(await doc.inputValue()).toContain('Tasks stuck or stalled')
+    // the checklist reads as prose, not a code box: normal text, no mono font, no inset frame
+    const look = await doc.evaluate((el) => ({
+      font: getComputedStyle(el).fontFamily,
+      size: parseFloat(getComputedStyle(el).fontSize),
+      outline: getComputedStyle(el).outlineStyle,
+      box: getComputedStyle(el.parentElement!).boxShadow,
+    }))
+    expect(look.font).not.toContain('mono')
+    expect(look.size).toBeGreaterThanOrEqual(16)
+    expect(look.box).toBe('none')
+    // at rest it has no frame; focus draws its line later
+    expect(look.outline).toBe('none')
     // Save shows only once it changed
     expect(await pilot.getByRole('button', { name: 'Save' }).count()).toBe(0)
     await doc.fill('- Keep the live link working\n- Ship the onboarding flow')

@@ -13,6 +13,45 @@ describe.skipIf(!browser)('what you send shows at once', () => {
       const els = [...document.querySelectorAll('[data-you] [data-anchor]')].filter((e) => e.textContent === t)
       return els.length === 1 && !els[0].closest('[data-msg]')!.getAttribute('data-msg')!.startsWith('out:')
     }, text)
+  test('a full brief is shown exactly as written, Settings block and all, as plain selectable prose rather than a formatted list', async () => {
+    const brief = [
+      '# Fix the webhook, then ship it',
+      '',
+      'The webhook drops events when two arrive together. `curl` the fixture and check the **log**.',
+      '',
+      'Settings: (from shepherdr show; where the brief above says otherwise, it wins)',
+      '- Review: on. Reviewer: a pi subagent.',
+      '- Must fix: major. Findings are tagged critical/major/minor/trivial.',
+      '',
+      'Queued: wait for HP-202.',
+    ].join('\n')
+    world.chats['p:vm-str:~'].messages.push({ id: 'plain-brief', who: 'you', at: Date.now(), text: brief })
+    for (const width of [390, 1440]) {
+      const page = await browser!.newPage({ viewport: { width, height: 900 } })
+      await page.goto(url())
+      const body = page.locator('[data-msg="plain-brief"] [data-text]')
+      await body.waitFor()
+      // one block of the same words: no Settings list, no rendered Markdown, nothing cut
+      expect(await body.textContent()).toBe(brief)
+      expect(await body.locator('strong, pre, code, ul, li, [data-settings], [data-changed]').count()).toBe(0)
+      expect(await body.locator(':scope > div').count()).toBe(1)
+      // you can select it all, and nothing spills sideways
+      const selected = await body.evaluate((el) => {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        const selection = window.getSelection()!
+        selection.removeAllRanges()
+        selection.addRange(range)
+        const text = selection.toString()
+        selection.removeAllRanges()
+        return text
+      })
+      expect(selected).toBe(brief)
+      expect(await body.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
+      await page.close()
+    }
+  }, 30_000)
+
   test('it shows the moment you tap Send, faded, then the real one takes its place without being drawn again', async () => {
     const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
     await page.goto(url())
