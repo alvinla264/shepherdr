@@ -30,9 +30,13 @@ describe.skipIf(!browser)('restarting an agent', () => {
       expect(box.x + box.width).toBeLessThanOrEqual(width)
       // a tap opens the sheet on what it runs on now, not on what Settings would start
       await controls.getByRole('menuitem', { name: /^Effort: / }).click()
-      const sheet = page.getByRole('alertdialog', { name: 'Restart this space’s coordinator?' })
+      const sheet = page.getByRole('alertdialog', { name: 'Restart coordinator?' })
       await sheet.locator('[data-restart]').waitFor()
-      expect(await sheet.textContent()).toContain('Recorded launch: Claude Code (Opus 5.5, high).')
+      // what it runs on now is the three picks, without the paragraphs that repeated it
+      expect(await sheet.getByRole('button', { name: /^Agent: / }).count()).toBe(1)
+      expect(await sheet.getByRole('button', { name: /^Model: / }).count()).toBe(1)
+      expect(await sheet.textContent()).not.toContain('Recorded launch')
+      expect(await sheet.textContent()).not.toContain('Applies to this chat')
       await sheet.getByRole('button', { name: 'Cancel' }).click()
       await page.close()
     }
@@ -70,14 +74,17 @@ describe.skipIf(!browser)('restarting an agent', () => {
     await row.hover()
     await row.getByRole('button', { name: 'More for this task' }).click()
     await page.getByRole('menuitem', { name: 'Restart agent…' }).click()
-    const sheet = page.getByRole('alertdialog', { name: 'Restart GTM-17’s agent?' })
+    const sheet = page.getByRole('alertdialog', { name: 'Restart GTM-17 agent?' })
     await sheet.waitFor()
     await sheet.locator('[data-restart]').waitFor()
-    expect(await sheet.textContent()).toContain('It resumes its session.')
-    expect(await sheet.textContent()).toContain('Its worktree and branch stay as they are.')
+    expect(await sheet.getByRole('button', { name: 'Cancel', exact: true }).count()).toBe(1)
+    expect(await sheet.getByRole('button', { name: 'Restart', exact: true }).count()).toBe(1)
+    // opened on what Settings would start, nothing is saved: the switch waits for a pick that differs
+    expect(await sheet.getByRole('switch').count()).toBe(0)
     await sheet.getByRole('button', { name: /^Agent: / }).click()
     await page.getByRole('menuitemradio', { name: 'Codex' }).click()
-    expect(await sheet.textContent()).toContain('Codex takes over with the chat so far, the brief and the work on its branch.')
+    expect(await sheet.textContent()).toContain('Codex starts a new session with this chat, the brief and branch.')
+    expect(await sheet.getByRole('switch', { name: 'Use for future task agents in gtm' }).isChecked()).toBe(false)
     await sheet.getByRole('button', { name: /^Model: / }).click()
     await page.getByRole('menuitemradio', { name: 'GPT-6-Sol', exact: true }).click()
     await sheet.getByRole('button', { name: /^Effort: / }).click()
@@ -95,9 +102,9 @@ describe.skipIf(!browser)('restarting an agent', () => {
     await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent(p.id)}`)
     await page.getByRole('button', { name: /^Menu/ }).click()
     await page.getByRole('menuitem', { name: 'Restart agent…' }).click()
-    const sheet = page.getByRole('alertdialog', { name: `Restart ${p.name}’s coordinator?` })
+    const sheet = page.getByRole('alertdialog', { name: 'Restart coordinator?' })
     await sheet.locator('[data-restart]').waitFor()
-    expect(await sheet.textContent()).toContain('Its tasks keep going.')
+    expect(await sheet.getByRole('button', { name: 'Restart', exact: true }).count()).toBe(1)
     const box = (await sheet.boundingBox())!
     expect(box.x).toBeGreaterThanOrEqual(0)
     expect(box.x + box.width).toBeLessThanOrEqual(390)
@@ -117,7 +124,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
       await page.goto(`http://127.0.0.1:${server!.port}/?place=p:vm-str:gtm&task=GTM-17`)
       await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
       await page.locator('[data-agent-controls]').last().getByRole('menuitem', { name: /^Model: / }).click()
-      const sheet = page.getByRole('alertdialog', { name: 'Restart GTM-17’s agent?' })
+      const sheet = page.getByRole('alertdialog', { name: 'Restart GTM-17 agent?' })
       await sheet.locator('[data-restart]').waitFor()
       expect(await sheet.textContent()).toContain('claude-gone-1 is unavailable. Choose Default or an available model before restarting.')
       const restart = sheet.getByRole('button', { name: 'Restart', exact: true })
@@ -127,7 +134,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
       await page.getByRole('menuitemradio', { name: 'Opus 5.5', exact: true }).click()
       expect(await restart.isEnabled()).toBe(true)
       // the launch it was recorded on stays as it was: only Restart changes that
-      expect(await sheet.textContent()).toContain('Recorded launch: Claude Code (claude-gone-1, high).')
+      expect(world.chats[key].agent).toEqual({ kind: 'claude', model: 'claude-gone-1', effort: 'high' })
       await sheet.getByRole('button', { name: 'Cancel' }).click()
     } finally {
       world.chats[key].agent = was
