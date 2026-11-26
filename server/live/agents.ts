@@ -51,6 +51,14 @@ export function carryClaudeSession(id: string, cwd: string): string | undefined 
   return runSync(['/bin/sh', '-c', sh, 'carry', task.unmirrored(to), task.unmirrored(join(claudeHome(), 'projects')), id]).code === 0 ? to : undefined
 }
 
+/** the launch as args passes it: resolved when it starts (a model by its id, a level its model takes), and kept, so a
+ *  later catalog cannot rewrite what a chat says it started on */
+export const launchOf = (r: Pick<AgentRecord, 'kind' | 'model' | 'effort'>) => {
+  const model = modelArg(r.kind, r.model)
+  const effort = effortFor(r.kind, r.effort, r.model)
+  return { kind: r.kind, ...(model ? { model } : {}), ...(effort ? { effort } : {}) }
+}
+
 export interface AgentRecord {
   /** chat key */
   key: string
@@ -64,6 +72,8 @@ export interface AgentRecord {
   tab?: string
   model?: string
   effort?: string
+  /** the launch it was started on, as passed: resolved then, so a later catalog does not rewrite it */
+  launch?: { kind: string; model?: string; effort?: string }
   /** instructions appended to the CLI's system prompt (or sent first, hidden, where it has no such option) */
   system?: string
   /** log files, oldest first: one per session */
@@ -235,11 +245,17 @@ export class Agents extends Emitter<Events> {
 
   constructor() {
     super()
-    // records written before logs were kept once each
+    // records written before logs were kept once each, and before a launch was kept: resolved once here, then kept
+    let filled = false
     for (const r of Object.values(this.records)) {
       r.logs = uniqueLogs(r.logs ?? [])
+      if (!r.launch) {
+        r.launch = launchOf(r)
+        filled = true
+      }
       this.byName.set(r.name, r.key)
     }
+    if (filled) this.save()
     this.sub = new Subscription(
       (e) => this.onEvent(e),
       () => this.refresh(),
@@ -518,7 +534,7 @@ export class Agents extends Emitter<Events> {
   /** an agent already running in herdr that Shepherdr should treat as this chat */
   adopt(key: string, a: AgentInfo, kind: string, workspace: string) {
     if (this.records[key]?.name === a.name) return
-    this.records[key] = { key, name: a.name!, kind, cwd: a.cwd ?? '', workspace, logs: [], started: Date.now() }
+    this.records[key] = { key, name: a.name!, kind, cwd: a.cwd ?? '', workspace, logs: [], started: Date.now(), launch: launchOf({ kind }) }
     this.byName.set(a.name!, key)
     this.learnSession(key, a)
     this.save()
@@ -568,6 +584,9 @@ export class Agents extends Emitter<Events> {
     const from = old?.cwd
     Object.assign(r, { name: spec.name, kind: spec.kind, cwd: spec.cwd, workspace: spec.workspace, tab: spec.tab ?? r.tab, env: spec.env ?? r.env, access: spec.access ?? r.access, model: spec.model ?? r.model, effort: spec.effort ?? r.effort, system: spec.system ?? r.system, set: spec.set ?? r.set, finished: false })
     r.started = Date.now()
+    // what this launch really passes (args), kept as it was: the screen says what it started on, not what the catalog
+    // would pass today
+    r.launch = launchOf(r)
     if (!resume) r.sessionId = r.kind === 'codex' ? undefined : randomUUID()
     // a run of its own: what its hooks record starts over
     if (r.hooks) this.hooks.forget(mirrored(r.hooks))

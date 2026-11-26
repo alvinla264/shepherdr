@@ -15,6 +15,7 @@ import type { LogEvent } from './readers/types.ts'
 import type { Cut } from './retry.ts'
 import { findModel, modelsOf, nearest } from './models.ts'
 import { sameCommand } from './commands.ts'
+import { launchHarness } from './restart.ts'
 import { CLI_NAME } from './settings.ts'
 import { replyOnScreen } from './streaming.ts'
 import { activityOf, codexThreadLog, cutOutput, headlessJob, JobLogs, lastLine, lineOf, outputAt, shown as shownStep, tailOf, type JobRec } from './activity.ts'
@@ -930,9 +931,14 @@ export class Chats {
     const st = this.agents.status(key)
     const failed = this.agents.failedLately(key)
     const jobs = this.jobs(key, act).map(({ log: _l, output: _o, ...j }): Job => j)
+    // what it launched on, as args passed it then: a later catalog does not rewrite it. A record kept from before this
+    // was stored resolves it now, once
+    const launched = r ? (r.launch ?? launchHarness({ kind: r.kind, model: r.model, effort: r.effort })) : undefined
+    const launchedAs = launched?.model ? findModel(r!.kind, launched.model) : undefined
     return {
       key,
       cli: CLI_NAME[kind] ?? kind,
+      agent: launched ? { ...launched, ...(launchedAs ? { modelLabel: launchedAs.label } : {}) } : undefined,
       messages: msgs,
       failed: failed.length ? failed : undefined,
       working: st === 'working' || undefined,

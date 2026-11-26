@@ -142,7 +142,9 @@ describe.skipIf(!browser)('reactions on a phone', () => {
     expect(tall.menu!.top).toBeGreaterThanOrEqual(tall.copy.bottom)
     await page.keyboard.press('Escape')
     await gone()
-    // a short screen (the keyboard up): the message shrinks so every emoji stays on it; shorter still, the menu gives way
+    // a short screen (the keyboard up): the message shrinks so every emoji stays on it; shorter still, the menu gives way.
+    // The box has the focus while the keyboard is up, so a phone's launch row beside it has given way, as when typing
+    await page.locator('textarea[name=message]').first().focus()
     for (const [h, menu] of [
       [300, true],
       [240, false],

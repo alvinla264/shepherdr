@@ -175,9 +175,9 @@ describe.skipIf(!browser)("a place's Autopilot", () => {
       // with Autopilot off the header says nothing of it
       const pill = page.locator('[data-chrome] button[data-mode]')
       expect(await pill.count()).toBe(0)
-      // no switch in the + menu: that keeps files, model and effort
+      // no switch in the + menu: that keeps the files, and the launch's agent, model and effort beside it
       await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
-      await page.getByRole('combobox', { name: 'Model' }).waitFor()
+      await page.getByRole('menuitem', { name: 'File or photo', exact: true }).waitFor()
       expect(await page.getByRole('menuitemcheckbox', { name: 'Autopilot' }).count()).toBe(0)
       await page.keyboard.press('Escape')
       // the ⋯ menu: the switch first, then search, the terminal, artifacts; no three-way picker
@@ -269,26 +269,33 @@ describe.skipIf(!browser)("a place's Autopilot", () => {
       await ctx.close()
     }, 30_000)
 
-  test("a task's agent has no mode: its + menu keeps Model and Effort only, whole even on a small phone", async () => {
+  test("a task's agent has no mode: the + menu keeps files, and its launch controls sit outside it, whole on a small phone", async () => {
     const page = await browser!.newPage({ viewport: { width: 320, height: 640 }, hasTouch: true })
     await page.goto(`http://127.0.0.1:${server!.port}/?place=all&task=GTM-14`)
-    await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
-    const model = page.getByRole('combobox', { name: 'Model' })
-    await model.waitFor()
-    expect(await page.getByRole('group', { name: 'Mode', exact: true }).count()).toBe(0)
-    // Claude Code's models and the levels its model takes, each a picker showing what it is on
-    expect(await model.locator('option').allTextContents()).toEqual(['Fable 5.1', 'Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5'])
-    const effort = page.getByRole('combobox', { name: 'Effort' })
-    expect(await effort.locator('option').allTextContents()).toEqual(['Low', 'Medium', 'High', 'Extra high', 'Max'])
-    const shown = (name: string) => page.locator(`.popover label:has(select[aria-label="${name}"]) > span:nth-child(3)`).textContent()
-    expect([await shown('Model'), await shown('Effort')]).toEqual(['Opus 5.5', 'High'])
-    await model.selectOption({ label: 'Haiku 5.5' })
-    await page.waitForFunction(() => document.querySelector('.popover label:has(select[aria-label="Model"]) > span:nth-child(3)')?.textContent === 'Haiku 5.5')
-    await model.selectOption({ label: 'Opus 5.5' })
-    // no words are cut short, and the page never scrolls sideways
-    const cut = await page.locator('.popover [aria-pressed] span, .popover label span').evaluateAll((ss) => ss.filter((s) => s.scrollWidth > s.clientWidth).map((s) => s.textContent))
-    expect(cut).toEqual([])
+    // what it was started on, beside the box rather than in a menu
+    const controls = page.locator('[data-agent-controls]').first()
+    await controls.waitFor()
+    expect(await controls.getByRole('button', { name: /^Agent: / }).count()).toBe(1)
+    expect(await controls.getByRole('button', { name: 'Model: Opus 5.5. Select and restart' }).count()).toBe(1)
+    expect(await controls.getByRole('button', { name: 'Effort: high. Select and restart' }).count()).toBe(1)
+    // one line of three, inside the screen it shares with a photo, and never sideways
+    for (const b of (await controls.locator('button').evaluateAll((bs) => bs.map((b) => b.getBoundingClientRect().toJSON()))) as { left: number; right: number }[]) {
+      expect(b.left).toBeGreaterThanOrEqual(0)
+      expect(b.right).toBeLessThanOrEqual(320)
+    }
+    expect((await controls.boundingBox())!.height).toBeLessThan(48)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    // typing is no moment to change what it runs on: with the box's keyboard up the row gives way, and comes back
+    const box = page.getByRole('textbox', { name: /Message/ }).first()
+    await box.focus()
+    await controls.waitFor({ state: 'detached' })
+    await box.blur()
+    await controls.waitFor()
+    // the + menu is files only: no mode, and no model or effort to change silently
+    await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
+    await page.getByRole('menuitem', { name: 'File or photo', exact: true }).waitFor()
+    expect(await page.getByRole('combobox', { name: 'Model' }).count()).toBe(0)
+    expect(await page.getByRole('group', { name: 'Mode', exact: true }).count()).toBe(0)
     await page.close()
   }, 30_000)
 })

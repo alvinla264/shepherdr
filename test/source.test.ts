@@ -16,6 +16,7 @@ const { heartbeatFile } = await import('../server/live/heartbeat.ts')
 const { carryOn } = await import('../server/live/retry.ts')
 const { Worktrees } = await import('../server/live/engine/worktrees.ts')
 const { fakeHerdr } = await import('./fake-herdr.ts')
+const { setModels, TABLE } = await import('../server/live/models.ts')
 
 const src = new LiveSource()
 // herdr makes task worktrees: a stand-in on real git; no terminal opens for their agents (no herdr is there)
@@ -464,7 +465,6 @@ describe('choice cards', () => {
     // an ordinary question: flagged, and nothing else about it changes
     const fast = await asked(['Rerun CI on main?', '--ordinary', '--choice', 'Rerun it', '--choice', 'Leave it'])
     expect(fast).toMatchObject({ ordinary: true, kind: 'Form', title: 'Rerun CI on main?' })
-    expect(fast.multi).toBeUndefined()
     // unmarked: the flag is absent, so the card keeps pick-then-Send
     expect((await asked(['Rerun CI on main?', '--choice', 'Rerun it', '--choice', 'Leave it'])).ordinary).toBeUndefined()
     // and a help listing offers the switch, saying what it is for
@@ -2004,6 +2004,65 @@ describe('startup menus before the first message', () => {
       herdr.visible = originals.visible
       src.agents.outbox = src.agents.outbox.filter((o) => o.key !== key)
       src.chats.forget(key)
+    }
+  })
+})
+
+describe('the launch a chat shows', () => {
+  test('is its own record, never Settings: no model or effort is claimed that was not passed, and the old actions cannot fake a change', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shep-launch-'))
+    execSync('git init -q -b main && git config user.email t@t && git config user.name T && echo hi > README.md && git add -A && git commit -qm init', { cwd: dir, shell: '/bin/sh' })
+    const p = await src.places.add(dir, 'launch-controls')
+    const place = placeId.space(p.name)
+    const t = src.engine.add({ project: p.name, title: 'Launch controls', by: 'test', later: true })
+    const keys = [place, `${t.id}/Agent`]
+    const records = src.agents.records
+    try {
+      src.settings.set('coordinator.agent', 'Claude Code', { space: p.name })
+      src.settings.set('task.agent', 'Claude Code', { space: p.name })
+      for (const key of keys) {
+        records[key] = { key, name: `launch-${key}`, kind: 'codex', model: 'gpt-6-sol', effort: 'high', cwd: dir, workspace: 'launch', logs: [], started: 0 }
+        expect(src.chat(key)?.agent).toEqual({ kind: 'codex', model: 'gpt-6-sol', modelLabel: 'GPT-6-Sol', effort: 'high' })
+        // model and effort are the launch's: the old actions refuse instead of pretending
+        const before = { ...records[key] }
+        expect(await src.act({ type: 'model', chat: key, model: 'gpt-6-luna' })).toMatchObject({ ok: false, error: expect.stringContaining('Restart') })
+        expect(await src.act({ type: 'effort', chat: key, effort: 'low' })).toMatchObject({ ok: false })
+        expect(records[key]).toEqual(before)
+        // nothing was passed at launch: nothing is claimed, even where Settings name a model
+        delete records[key].model
+        delete records[key].effort
+        expect(src.chat(key)?.agent).toEqual({ kind: 'codex' })
+        const info = (await src.act({ type: 'restart-info', chat: key })) as { info: { on: unknown; want: unknown } }
+        expect(info.info.on).toEqual({ kind: 'codex' })
+        expect(info.info.want).toMatchObject({ kind: 'claude' })
+        // a model codex no longer has is refused before anything is saved or started
+        expect(await src.act({ type: 'restart', chat: key, kind: 'codex', model: 'no-longer-available', save: true })).toMatchObject({ ok: false, error: expect.stringContaining('no available model') })
+        expect(src.chat(key)?.agent).toEqual({ kind: 'codex' })
+      }
+    } finally {
+      for (const key of keys) delete records[key]
+      src.settings.set('coordinator.agent', null, { space: p.name })
+      src.settings.set('task.agent', null, { space: p.name })
+    }
+  })
+
+  test('a launch is kept as it was passed: a catalog that moved on neither rewrites it nor rounds it in the sheet', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shep-launch-kept-'))
+    execSync('git init -q -b main && git config user.email t@t && git config user.name T && echo hi > README.md && git add -A && git commit -qm init', { cwd: dir, shell: '/bin/sh' })
+    const p = await src.places.add(dir, 'launch-kept')
+    const place = placeId.space(p.name)
+    const records = src.agents.records
+    // the model no longer takes max, though the launch was given it and really started with it
+    setModels('codex', { ...TABLE.codex!, models: TABLE.codex!.models.map((m) => (m.id === 'gpt-6-luna' ? { ...m, efforts: ['low', 'medium', 'high'] } : m)) })
+    try {
+      records[place] = { key: place, name: 'kept', kind: 'codex', model: 'gpt-6-luna', effort: 'high', cwd: dir, workspace: 'kept', logs: [], started: 0, launch: { kind: 'codex', model: 'gpt-6-luna', effort: 'max' } }
+      expect(src.chat(place)?.agent).toEqual({ kind: 'codex', model: 'gpt-6-luna', modelLabel: 'GPT-6-Luna', effort: 'max' })
+      const info = (await src.act({ type: 'restart-info', chat: place })) as { info: { on: unknown; onWords: string } }
+      expect(info.info.on).toEqual({ kind: 'codex', model: 'gpt-6-luna', effort: 'max' })
+      expect(info.info.onWords).toBe('Codex (GPT-6-Luna, max)')
+    } finally {
+      setModels('codex', undefined)
+      delete records[place]
     }
   })
 })

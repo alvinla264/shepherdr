@@ -1,7 +1,8 @@
 // What a restart says and offers: the hint once Settings say other than what an agent runs on, a harness in words,
 // and what an agent taking over on another CLI is told.
 import { describe, expect, test } from 'bun:test'
-import { fitHarness, harnessWords, recentChat, restartHint, sameHarness } from '../server/live/restart.ts'
+import { asRecorded, fitHarness, harnessProblem, harnessWords, launchHarness, recentChat, restartHint, restartInfo, sameHarness } from '../server/live/restart.ts'
+import { setModels, TABLE } from '../server/live/models.ts'
 import { restartLine, resumedLine } from '../server/live/prompts.ts'
 
 describe('the restart hint', () => {
@@ -62,5 +63,49 @@ describe('what the agent is told', () => {
 
   test('its own CLI resumes: carry on, or say nothing', () => {
     expect(resumedLine('Claude Code (Opus 5.5, high)')).toContain('<no-reply>restarted</no-reply>')
+  })
+})
+
+describe('what a chat launched on', () => {
+  test('is only what its CLI is really passed: nothing for one that takes no model or effort, a level its model rounds', () => {
+    expect(launchHarness({ kind: 'gemini', model: 'saved-only', effort: 'high' })).toEqual({ kind: 'gemini' })
+    expect(launchHarness({ kind: 'codex', model: 'gpt-6-luna', effort: 'ultra' })).toEqual({ kind: 'codex', model: 'gpt-6-luna', effort: 'max' })
+    // the CLI's own are no values to show at all
+    expect(launchHarness({ kind: 'claude', model: 'default', effort: 'default' })).toEqual({ kind: 'claude' })
+    // a launch already given a level keeps it, though today's catalog would round it to another
+    expect(asRecorded({ kind: 'codex', model: 'gpt-6-luna', effort: 'max' })).toEqual({ kind: 'codex', model: 'gpt-6-luna', effort: 'max' })
+  })
+
+  test('is its own record, never what Settings now say for its role; the catalog defaults are said plainly', () => {
+    for (const role of ['task', 'coordinator'] as const) {
+      const info = restartInfo({ role, on: { kind: 'codex' }, want: { kind: 'claude', model: 'sonnet', effort: 'high' }, kinds: ['claude', 'codex'], working: true })
+      expect(info.on).toEqual({ kind: 'codex' })
+      expect(info.want).toEqual({ kind: 'claude', model: 'claude-sonnet-5-5', effort: 'high' })
+      expect(info.clis.find((c) => c.kind === 'claude')).toMatchObject({ defaultModel: 'claude-opus-5-5', defaultEffort: 'medium' })
+    }
+  })
+
+  test('an older model it still takes stays pickable while it is the one launched on', () => {
+    const old = { id: 'claude-opus-old', label: 'Older Opus', efforts: ['low', 'high'], effort: 'high' }
+    setModels('claude', { ...TABLE.claude!, others: [old] })
+    try {
+      const info = restartInfo({ role: 'task', on: { kind: 'claude', model: old.id }, want: { kind: 'claude' }, kinds: ['claude'], working: false })
+      expect(info.clis[0]!.models).toContainEqual({ id: old.id, label: old.label, efforts: old.efforts, defaultEffort: 'high' })
+      expect(info.clis[0]!.models!.find((m) => m.id === 'claude-fable-5-1')?.defaultEffort).toBe('high')
+      expect(harnessProblem({ kind: 'claude', model: old.id })).toBeUndefined()
+    } finally {
+      setModels('claude', undefined)
+    }
+  })
+
+  test('a model it dropped, another CLI’s model, or a level it does not take is refused, never rounded silently', () => {
+    expect(harnessProblem({ kind: 'codex', model: 'retired-model' })).toContain('no available model')
+    expect(harnessProblem({ kind: 'codex', model: 'claude-opus-5-5' })).toContain('no available model')
+    expect(harnessProblem({ kind: 'codex', model: 'gpt-6-luna', effort: 'ultra' })).toContain('does not support')
+    expect(harnessProblem({ kind: 'gemini', effort: 'high' })).toContain('does not support')
+    // the CLI's own, and a CLI that lists its own models, are not refused
+    expect(harnessProblem({ kind: 'gemini', model: 'default', effort: 'default' })).toBeUndefined()
+    expect(harnessProblem({ kind: 'pi', model: 'provider/model', effort: 'high' })).toBeUndefined()
+    expect(harnessProblem({ kind: 'codex', effort: 'high' })).toBeUndefined()
   })
 })
