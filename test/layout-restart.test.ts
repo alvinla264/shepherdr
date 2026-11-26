@@ -1,4 +1,4 @@
-// Restarting an agent, in a real browser (layout.ts): the launch controls beside a chat's box, the restart sheet from
+// Restarting an agent, in a real browser (layout.ts): the launch controls in a chat's + menu, the restart sheet from
 // them or a ⋯ menu, and the card its chat shows after.
 import { describe, expect, test } from 'bun:test'
 import { layout } from './layout.ts'
@@ -6,7 +6,7 @@ import { layout } from './layout.ts'
 const { browser, world, server } = await layout({ everything: true })
 
 describe.skipIf(!browser)('restarting an agent', () => {
-  test('Settings that moved on show no banner any more: the launch controls stay, and only Restart changes anything (phone and desktop)', async () => {
+  test('Settings that moved on show no banner any more: the launch controls wait in the + menu, and only Restart changes anything (phone and desktop)', async () => {
     const p = world.snapshot().places.find((x) => !x.home && world.chats[x.chat]?.restart)!
     for (const phone of [true, false]) {
       world.chats[p.chat].restart = { on: 'Claude Code', want: 'Codex' }
@@ -16,21 +16,49 @@ describe.skipIf(!browser)('restarting an agent', () => {
       const width = phone ? 390 : 1280
       const page = await browser!.newPage(phone ? { viewport: { width, height: 844 }, hasTouch: true, isMobile: true } : { viewport: { width, height: 800 } })
       await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent(p.id)}`)
-      const controls = page.locator('[data-agent-controls]').first()
+      const controls = page.locator('[data-agent-controls]').last()
+      // out of the composer's way until + opens, then one row each for Agent, Model and Effort
+      await page.locator('[data-composer]').last().waitFor()
+      expect(await controls.count()).toBe(0)
+      await page.locator('[data-composer] button[aria-label="Attach files and more"]').last().click()
       await controls.waitFor()
-      // no banner, and nothing restarted on its own
       expect(await page.locator('[data-restart-hint]').count()).toBe(0)
-      expect(await controls.getByRole('button').count()).toBe(3)
+      expect(await controls.getByRole('menuitem').count()).toBe(3)
       expect(JSON.stringify(world.chats[p.chat].agent)).toBe(before)
       const box = (await controls.boundingBox())!
       expect(box.x).toBeGreaterThanOrEqual(0)
       expect(box.x + box.width).toBeLessThanOrEqual(width)
       // a tap opens the sheet on what it runs on now, not on what Settings would start
-      await controls.getByRole('button', { name: /^Effort: / }).click()
+      await controls.getByRole('menuitem', { name: /^Effort: / }).click()
       const sheet = page.getByRole('alertdialog', { name: 'Restart this space’s coordinator?' })
       await sheet.locator('[data-restart]').waitFor()
       expect(await sheet.textContent()).toContain('Recorded launch: Claude Code (Opus 5.5, high).')
       await sheet.getByRole('button', { name: 'Cancel' }).click()
+      await page.close()
+    }
+  }, 30_000)
+
+  test('a launch with no recorded model or effort says so inside +, and closing the menu changes nothing', async () => {
+    const key = 'GTM-17/Agent'
+    const was = world.chats[key].agent
+    const wasCli = world.chats[key].cli
+    world.chats[key].agent = { kind: 'codex' }
+    world.chats[key].cli = 'Codex'
+    const page = await browser!.newPage({ viewport: { width: 320, height: 844 } })
+    try {
+      await page.goto(`http://127.0.0.1:${server!.port}/?place=all&task=GTM-17`)
+      await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
+      const controls = page.locator('[data-agent-controls]').last()
+      await controls.getByRole('menuitem', { name: 'Model: Default / unknown. Select and restart', exact: true }).waitFor()
+      expect(await controls.getByRole('menuitem', { name: 'Effort: Default / unknown. Select and restart', exact: true }).count()).toBe(1)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
+      // closing + puts the composer back as it was
+      await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
+      await controls.waitFor({ state: 'detached' })
+      expect(world.chats[key].agent).toEqual({ kind: 'codex' })
+    } finally {
+      world.chats[key].agent = was
+      world.chats[key].cli = wasCli
       await page.close()
     }
   }, 30_000)
@@ -87,7 +115,8 @@ describe.skipIf(!browser)('restarting an agent', () => {
     const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
     try {
       await page.goto(`http://127.0.0.1:${server!.port}/?place=p:vm-str:gtm&task=GTM-17`)
-      await page.locator('[data-agent-controls]').first().getByRole('button', { name: /^Model: / }).click()
+      await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
+      await page.locator('[data-agent-controls]').last().getByRole('menuitem', { name: /^Model: / }).click()
       const sheet = page.getByRole('alertdialog', { name: 'Restart GTM-17’s agent?' })
       await sheet.locator('[data-restart]').waitFor()
       expect(await sheet.textContent()).toContain('claude-gone-1 is unavailable. Choose Default or an available model before restarting.')

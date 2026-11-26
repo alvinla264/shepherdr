@@ -296,31 +296,25 @@ describe.skipIf(!browser)("a place's Autopilot", () => {
       await ctx.close()
     }, 30_000)
 
-  test("a task's agent has no mode: the + menu keeps files, and its launch controls sit outside it, whole on a small phone", async () => {
+  test("a task's agent has no mode: the + menu keeps files and holds its launch controls, whole on a small phone", async () => {
     const page = await browser!.newPage({ viewport: { width: 320, height: 640 }, hasTouch: true })
     await page.goto(`http://127.0.0.1:${server!.port}/?place=all&task=GTM-14`)
-    // what it was started on, beside the box rather than in a menu
+    // nothing takes the composer's room until the + menu is open
+    await page.locator('[data-composer]').first().waitFor()
+    expect(await page.locator('[data-agent-controls]').count()).toBe(0)
+    await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
+    await page.getByRole('menuitem', { name: 'File or photo', exact: true }).waitFor()
     const controls = page.locator('[data-agent-controls]').first()
     await controls.waitFor()
-    expect(await controls.getByRole('button', { name: /^Agent: / }).count()).toBe(1)
-    expect(await controls.getByRole('button', { name: 'Model: Opus 5.5. Select and restart' }).count()).toBe(1)
-    expect(await controls.getByRole('button', { name: 'Effort: high. Select and restart' }).count()).toBe(1)
-    // one line of three, inside the screen it shares with a photo, and never sideways
-    for (const b of (await controls.locator('button').evaluateAll((bs) => bs.map((b) => b.getBoundingClientRect().toJSON()))) as { left: number; right: number }[]) {
+    expect(await controls.getByRole('menuitem', { name: /^Agent: / }).count()).toBe(1)
+    expect(await controls.getByRole('menuitem', { name: 'Model: Opus 5.5. Select and restart' }).count()).toBe(1)
+    expect(await controls.getByRole('menuitem', { name: 'Effort: high. Select and restart' }).count()).toBe(1)
+    // each row fits the small screen, with no model or effort changed silently
+    for (const b of (await controls.locator('[role=menuitem]').evaluateAll((bs) => bs.map((b) => b.getBoundingClientRect().toJSON()))) as { left: number; right: number }[]) {
       expect(b.left).toBeGreaterThanOrEqual(0)
       expect(b.right).toBeLessThanOrEqual(320)
     }
-    expect((await controls.boundingBox())!.height).toBeLessThan(48)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-    // typing is no moment to change what it runs on: with the box's keyboard up the row gives way, and comes back
-    const box = page.getByRole('textbox', { name: /Message/ }).first()
-    await box.focus()
-    await controls.waitFor({ state: 'detached' })
-    await box.blur()
-    await controls.waitFor()
-    // the + menu is files only: no mode, and no model or effort to change silently
-    await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
-    await page.getByRole('menuitem', { name: 'File or photo', exact: true }).waitFor()
     expect(await page.getByRole('combobox', { name: 'Model' }).count()).toBe(0)
     expect(await page.getByRole('group', { name: 'Mode', exact: true }).count()).toBe(0)
     await page.close()
