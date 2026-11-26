@@ -1,7 +1,7 @@
 // The shepherdr command: who may merge, choice cards, files, modes, adding projects.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -11,7 +11,7 @@ delete process.env.SHEPHERDR_MAIN
 const { LiveSource } = await import('../server/live/source.ts')
 const { HOST, NAME, placeId, Places } = await import('../server/live/places.ts')
 const { herdr } = await import('../server/live/herdr.ts')
-const { hidden } = await import('../server/live/agents.ts')
+const { hidden, Agents } = await import('../server/live/agents.ts')
 const { isAgentProcess } = await import('../server/live/agent-process.ts')
 const { heartbeatFile } = await import('../server/live/heartbeat.ts')
 const { carryOn } = await import('../server/live/retry.ts')
@@ -927,6 +927,25 @@ describe('what you send shows at once', () => {
     agents.reachable = reachable
     agents.outbox = agents.outbox.filter((o) => o.key !== chat)
   })
+  test('requested news waiting in the outbox is neither stranded nor shown as a failed message', async () => {
+    const agents = src.agents
+    agents.outbox = agents.outbox.filter((o) => o.key !== chat)
+    const cid = `requested-news:waiting-${Date.now()}`
+    await as('blocked', () => agents.send(chat, hidden('SHE-1 is ready', 'news'), { cid }))
+    expect(agents.waiting(chat).some((o) => o.cid === cid)).toBe(true)
+    const reachable = agents.reachable
+    agents.reachable = false
+    try {
+      await as('gone', async () => agents.checkStranded(Date.now() + agents.strandAfter))
+    } finally {
+      agents.reachable = reachable
+    }
+    // it waits for the coordinator; the mailbox keeps it until it is in
+    expect(agents.waiting(chat).some((o) => o.cid === cid)).toBe(true)
+    expect(src.chats.chat(chat).failed?.some((f) => f.cid === cid) ?? false).toBe(false)
+    agents.outbox = agents.outbox.filter((o) => o.cid !== cid)
+    agents.save()
+  })
   test('sent again while the first is still on its way, it goes in once', async () => {
     const agents = src.agents
     agents.outbox = agents.outbox.filter((o) => o.key !== chat)
@@ -1146,6 +1165,141 @@ describe('news for coordinators', () => {
     } finally {
       src.agents.send = send
       src.places.modes = modes
+    }
+  })
+
+  test("a coordinator that asked another space for a task hears that task's news once, and gets no card of its own", async () => {
+    const ownedDir = mkdtempSync(join(tmpdir(), 'shep-news-owned-'))
+    execSync('git init -q -b main', { cwd: ownedDir, shell: '/bin/sh' })
+    const place = await src.places.add(ownedDir, 'newsowned')
+    const originDir = mkdtempSync(join(tmpdir(), 'shep-news-origin-'))
+    execSync('git init -q -b main', { cwd: originDir, shell: '/bin/sh' })
+    const origin = await src.places.add(originDir, 'newsorigin')
+    const requester = placeId.space(origin.name)
+    const home = placeId.home()
+    const project = placeId.space(place.name)
+    const sent: { chat: string; text: string }[] = []
+    const send = src.agents.send
+    const record = src.agents.records[requester]
+    const modes = { ...src.places.modes }
+    src.agents.records[requester] = { key: requester, name: 'coordinator', kind: 'codex', logs: [], cwd: originDir, workspace: 'origin', started: 1 }
+    src.agents.save()
+    src.agents.send = (async (chat: string, text: string) => (sent.push({ chat, text }), { waiting: false })) as never
+    const drain = () => (src as unknown as { drainRequestedNews(): Promise<void> }).drainRequestedNews()
+    // the words of one piece of news, whichever other news (a task added, an agent's trouble) arrives meanwhile
+    const toRequester = (words: string) => sent.filter((n) => n.chat === requester && n.text.includes(words))
+    try {
+      // nothing another test left in the mailbox reaches this test's stub send
+      rmSync(join(process.env.SHEPHERDR_HOME!, 'requested-news'), { recursive: true, force: true })
+      for (const id of [requester, home, project]) delete src.places.modes[id]
+      const asked = src.engine.add({ project: place.name, title: 'Asked elsewhere', by: 'test', requester })
+      const cards = src.chats.chat(requester).messages.length
+      src.engine.emit('news', project, `${asked.id} is ready to merge`, 'ready', { task: asked.id, event: 'ready' })
+      await until(() => toRequester(`${asked.id} is ready to merge`).length > 0)
+      expect(toRequester(`${asked.id} is ready to merge`)[0]!.text).toContain('You requested this task')
+      // owner and main home still hear it, as they always did
+      expect(sent.some((n) => n.chat === project && n.text.includes('is ready to merge'))).toBe(true)
+      expect(sent.some((n) => n.chat === home && n.text.includes('is ready to merge'))).toBe(true)
+      // its agent's terminal got the words; its chat got no card of its own
+      expect(src.chats.chat(requester).messages).toHaveLength(cards)
+      // replaying the mailbox does not say it twice
+      await drain()
+      expect(toRequester(`${asked.id} is ready to merge`)).toHaveLength(1)
+      // a task asked for where it already lives is delivered to that space as it always was, never twice
+      asked.requester = project
+      src.engine.emit('news', project, `${asked.id} was merged`, 'done', { task: asked.id, event: 'merged' })
+      await Bun.sleep(120)
+      expect(toRequester(`${asked.id} was merged`)).toHaveLength(0)
+      expect(sent.some((n) => n.chat === project && n.text.includes('was merged'))).toBe(true)
+    } finally {
+      src.agents.send = send
+      if (record) src.agents.records[requester] = record
+      else delete src.agents.records[requester]
+      src.agents.save()
+      src.places.modes = modes
+    }
+  })
+
+  test('the command keeps only a known coordinator chat as the task\'s requester', async () => {
+    const originDir = mkdtempSync(join(tmpdir(), 'shep-news-ask-'))
+    execSync('git init -q -b main', { cwd: originDir, shell: '/bin/sh' })
+    const origin = await src.places.add(originDir, 'newsask')
+    const requester = placeId.space(origin.name)
+    const record = src.agents.records[requester]
+    src.agents.records[requester] = { key: requester, name: 'coordinator', kind: 'codex', logs: [], cwd: originDir, workspace: 'ask', started: 1 }
+    src.agents.save()
+    const add = src.engine.add
+    const seen: { requester?: string }[] = []
+    src.engine.add = ((o: Parameters<typeof add>[0]) => {
+      seen.push(o)
+      throw new Error('stop before an agent starts')
+    }) as typeof add
+    try {
+      expect((await src.cli(['task', 'add', 'Anything', '--desc', 'x'], { chat: requester })).code).toBe(1)
+      expect((await src.cli(['task', 'add', 'Anything', '--space', origin.name, '--desc', 'x'], { chat: 'invented' })).code).toBe(1)
+      expect(seen[0]!.requester).toBe(requester)
+      expect(seen[1]!.requester).toBeUndefined()
+    } finally {
+      src.engine.add = add
+      if (record) src.agents.records[requester] = record
+      else delete src.agents.records[requester]
+      src.agents.save()
+    }
+  })
+
+  test('a requested-news receipt outlives a restart: the same news is answered, not mailed again, and its stale queued copy goes', async () => {
+    const chat = 'SHE-0/Agent'
+    const cid = `requested-news:receipt-${Date.now()}`
+    const item = { id: cid, cid, key: chat, text: 'SHE-1 is ready. You requested this task.', at: Date.now() }
+    const agents = src.agents
+    // the words went in, then the server stopped before its queued copy was taken out
+    ;(agents as unknown as { went(o: typeof item): void }).went(item)
+    agents.outbox.push(item)
+    agents.save()
+    const restarted = new Agents()
+    try {
+      expect(await restarted.send(chat, item.text, { cid })).toMatchObject({ waiting: false })
+      // what waited is dropped before it could go in a second time
+      await restarted.deliver(chat)
+      expect(restarted.waiting(chat).some((o) => o.cid === cid)).toBe(false)
+    } finally {
+      restarted.stop()
+      agents.outbox = agents.outbox.filter((o) => o !== item)
+      agents.save()
+    }
+  })
+})
+
+describe('a task added on another machine', () => {
+  test('the helper forwards its own options and the asking coordinator, and only a real coordinator counts', async () => {
+    const peers = src.peers!
+    const list = peers.list
+    const ask = peers.fetch
+    const chat = placeId.home()
+    const record = src.agents.records[chat]
+    src.agents.records[chat] = { key: chat, name: 'home', kind: 'codex', cwd: '/', workspace: 'home', logs: [], started: 1 }
+    src.agents.save()
+    const calls: { args: string[]; chat?: string }[] = []
+    peers.list = (() => [{ rec: { machine: 'studio' }, snap: { places: [{ id: 'p:studio:gallery', name: 'Gallery', home: false }] } }]) as never
+    peers.fetch = (async (_l: never, path: string, init: RequestInit) => {
+      expect(path).toBe('/api/cli')
+      calls.push(JSON.parse(String(init.body)))
+      return Response.json({ code: 0, out: 'Added GAL-7: Gallery walls.' })
+    }) as never
+    try {
+      const r = await src.cli(['task', 'add', 'Gallery walls', '--space', 'p:studio:gallery', '--desc', 'Full brief', '--later'], { chat })
+      expect(r.code).toBe(0)
+      expect(calls[0]!.args).toEqual(['task', 'add', 'Gallery walls', '--space', 'gallery', '--desc', 'Full brief', '--later'])
+      expect(calls[0]!.chat).toBe(chat)
+      // a name no coordinator record holds is no requester: none is forwarded
+      await src.cli(['task', 'add', 'Nameless', '--space', 'p:studio:gallery'], { chat: placeId.space('gallery') })
+      expect(calls[1]!.chat).toBeUndefined()
+    } finally {
+      peers.list = list
+      peers.fetch = ask
+      if (record) src.agents.records[chat] = record
+      else delete src.agents.records[chat]
+      src.agents.save()
     }
   })
 })
