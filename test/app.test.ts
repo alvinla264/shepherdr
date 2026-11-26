@@ -56,7 +56,7 @@ class Stub extends Emitter<SourceEvents> {
 }
 
 const pushed: { alert: Alert; skip: Set<string> }[] = []
-const push = { publicKey: 'k', send: async (alert: Alert, skip: Set<string>) => void pushed.push({ alert, skip }) }
+const push = { publicKey: 'k', subscribe: () => {}, send: async (alert: Alert, skip: Set<string>) => void pushed.push({ alert, skip }) }
 const source = new Stub()
 const server = startApp({ source: source as unknown as Source, dist: '/nonexistent', push: push as unknown as Push, port: 0 })
 const base = `http://127.0.0.1:${server.port}`
@@ -124,6 +124,24 @@ describe('alerts', () => {
     expect([...phone.got, ...mac.got].some((m) => m.type === 'alert')).toBe(false)
     phone.ws.close()
     mac.ws.close()
+  })
+  test('after an alert is pushed, the app gets the snapshot again, so Settings can name a device that missed it', async () => {
+    const app = await open()
+    await settle()
+    const before = app.got.length
+    source.emit('alert', alert)
+    await settle()
+    expect(app.got.slice(before).some((m) => m.type === 'snapshot')).toBe(true)
+    app.ws.close()
+  })
+  test('a device that subscribes brings the app a fresh snapshot too', async () => {
+    const app = await open()
+    await settle()
+    const before = app.got.length
+    const r = await fetch(`${base}/api/push/subscribe`, { method: 'POST', body: JSON.stringify({ sub: { endpoint: 'https://push.example/a', keys: { auth: 'a', p256dh: 'k' } }, device: 'phone' }) })
+    expect(r.status).toBe(200)
+    while (!app.got.slice(before).some((m) => m.type === 'snapshot')) await new Promise((r) => setTimeout(r, 10))
+    app.ws.close()
   })
   test('with the app closed or in the background, every device gets the push', async () => {
     const phone = await open()
