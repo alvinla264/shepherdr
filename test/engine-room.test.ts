@@ -3,9 +3,10 @@
 import { describe, expect, test } from 'bun:test'
 import { repo, started, until, world } from './engine-world.ts'
 
-/** a fresh world with nothing from earlier tests, its machine's limits set */
-function fresh(limits: Record<string, string>) {
-  const w = world()
+/** a fresh world with nothing from earlier tests, its machine's limits set; plainWorktrees: no git checkout, for a test
+ *  of the engine's own decisions */
+function fresh(limits: Record<string, string>, plainWorktrees = false) {
+  const w = world(undefined, { plainWorktrees })
   w.engine.tasks.splice(0)
   for (const k of ['machine.maxTasks', 'machine.startLoad', 'machine.startMemory']) w.settings.set(k, null)
   for (const [k, v] of Object.entries(limits)) expect(w.settings.set(k, v).ok).toBe(true)
@@ -84,7 +85,9 @@ describe('room on the machine', () => {
   }, 20_000)
 
   test('a busy machine holds new tasks ("Waiting for the machine") and lets them go one at a time, 30 seconds apart', async () => {
-    const w = fresh({})
+    // no worktree checkout on this test's path: it measures the engine's hold and release, and a real `git worktree add`
+    // here only put the suite's 20 s ceiling between a start and this test's waits on a loaded runner
+    const w = fresh({}, true)
     let m: { busy?: 'cpu' | 'memory'; herdr: boolean } = { busy: 'cpu', herdr: true }
     w.engine.machine = () => m
     const p = await w.places.add(repo(), 'room-load')
@@ -97,13 +100,16 @@ describe('room on the machine', () => {
     w.engine.release()
     expect(a.worktree).toBeUndefined()
     m = { herdr: true }
-    const now = Date.now()
-    w.engine.release(now)
+    // the world's clock is the engine's, so the 30 seconds between starts are simulated: moved on, never waited for
+    const now = w.clock.now
+    w.engine.release()
     await until(() => w.started.some((s) => s.key === `${a.id}/Agent`))
     expect(w.engine.statusOf(b)).toBe('queued')
-    w.engine.release(now + 10_000)
+    w.clock.now = now + 10_000
+    w.engine.release()
     expect(b.held).toBeTruthy()
-    w.engine.release(now + 31_000)
+    w.clock.now = now + 31_000
+    w.engine.release()
     await until(() => w.started.some((s) => s.key === `${b.id}/Agent`))
   })
 })

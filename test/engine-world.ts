@@ -23,8 +23,11 @@ export function repo() {
   return dir
 }
 
-/** boot: what herdr says once the agent is ready; any but working leaves its brief waiting to go in */
-export function world(herdr = fakeHerdr(), o: { boot?: string } = {}) {
+/** boot: what herdr says once the agent is ready; any but working leaves its brief waiting to go in. plainWorktrees:
+ *  herdr makes the folder where git would make a worktree, without a checkout (fake-herdr.ts): a test of what the
+ *  engine decides should not wait on git for its own path */
+export function world(herdr?: ReturnType<typeof fakeHerdr>, o: { boot?: string; plainWorktrees?: boolean } = {}) {
+  herdr ??= fakeHerdr({ plain: o.plainWorktrees })
   const started: { key: string; first?: string; cwd: string; system?: string; pane?: string }[] = []
   const status: Record<string, string> = {}
   const sent: { key: string; text: string }[] = []
@@ -98,6 +101,9 @@ export function world(herdr = fakeHerdr(), o: { boot?: string } = {}) {
   const places = new Places()
   const settings = new Settings()
   const engine = new Engine(agents as never, chats as never, places, settings, herdr.h as never)
+  /** the world's clock: the engine spaces starts by it, so a test moves time on instead of waiting 30 seconds for it */
+  const clock = { now: Date.now() }
+  engine.time = () => clock.now
   const news: string[] = []
   /** the place each news is for: a project's place id, as its coordinator's chat has it */
   const newsTo: string[] = []
@@ -114,7 +120,7 @@ export function world(herdr = fakeHerdr(), o: { boot?: string } = {}) {
     outbox.splice(0, outbox.length, ...outbox.filter((k) => k !== key))
     engine.sent(key)
   }
-  return { routed, agents, engine, places, settings, started, sent, posted, status, records, news, newsTo, cards, agentIs, brief, herdr, chat, bg, forgot, said, stopped }
+  return { routed, agents, engine, places, settings, clock, started, sent, posted, status, records, news, newsTo, cards, agentIs, brief, herdr, chat, bg, forgot, said, stopped }
 }
 
 export const until = async (f: () => boolean, ms = 8000) => {

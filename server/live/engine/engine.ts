@@ -374,6 +374,8 @@ export class Engine extends Emitter<Events> {
   /** how loaded this machine is now: over a start limit (health.ts busy), and whether herdr answers; none until first
    *  measured, which holds nothing by load */
   machine?: () => { busy?: 'cpu' | 'memory'; herdr: boolean } | undefined
+  /** the time this engine decides starts by: a health sample's own, or a test's, never two clocks for one rule */
+  time: () => number = Date.now
   /** when a held task last started while load decided */
   private lastStart = 0
   private releasing = false
@@ -973,9 +975,10 @@ export class Engine extends Emitter<Events> {
 
   /**
    * Start held tasks while this machine has room, oldest first. While load decides, one at a time, START_GAP apart:
-   * the load average takes a moment to show what a task adds. Called on each health sample and status change.
+   * the load average takes a moment to show what a task adds. Called on each health sample and status change, with
+   * that sample's time; every other caller (a task settling, a Setting changed) reads the engine's own.
    */
-  release(now = Date.now()) {
+  release(now = this.time()) {
     if (this.releasing) return
     this.releasing = true
     try {

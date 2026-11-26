@@ -1,7 +1,9 @@
 // herdr's worktree API, standing in for herdr on real git: a linked worktree's workspace nests under its repo's own,
 // which it opens when none is open; removing one is git worktree remove, never forced.
+// `plain` makes the folder where git would make a worktree, without a checkout: for a test of what the engine decides
+// (a hold, a start), whose own path must not wait on git under a loaded runner.
 import { execSync } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -9,7 +11,7 @@ const sh = (cmd: string, cwd: string) => execSync(cmd, { cwd, shell: '/bin/sh', 
 
 type Space = { workspace_id: string; label: string; tab_count: number; focused?: boolean; worktree?: { checkout_path: string; is_linked_worktree: boolean; repo_root: string }; panes: string[] }
 
-export function fakeHerdr() {
+export function fakeHerdr(o: { plain?: boolean } = {}) {
   let n = 0
   const spaces: Space[] = []
   const cwd = new Map<string, string>()
@@ -64,6 +66,10 @@ export function fakeHerdr() {
       up()
       const repo = source(from)
       const path = at ?? join(root, basename(repo), branch.replace(/\//g, '-'))
+      if (o.plain) {
+        mkdirSync(path, { recursive: true })
+        return opened(repo, path, label)
+      }
       const has = execSync(`git branch --list ${branch}`, { cwd: repo, encoding: 'utf8' }).trim()
       sh(has ? `git worktree add -q ${path} ${branch}` : `git worktree add -q -b ${branch} ${path} ${base}`, repo)
       return opened(repo, path, label)
@@ -77,7 +83,8 @@ export function fakeHerdr() {
     },
     worktreeRemove: async (id: string, force = false) => {
       const ws = find(id)!
-      sh(`git worktree remove ${force ? '--force ' : ''}${ws.worktree!.checkout_path}`, ws.worktree!.repo_root)
+      if (o.plain) rmSync(ws.worktree!.checkout_path, { recursive: true, force: true })
+      else sh(`git worktree remove ${force ? '--force ' : ''}${ws.worktree!.checkout_path}`, ws.worktree!.repo_root)
       for (const p of ws.panes) agentPanes.delete(p)
       drop(id)
     },
