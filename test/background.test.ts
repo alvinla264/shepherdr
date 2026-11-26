@@ -139,12 +139,25 @@ describe('an agent whose turn ended', () => {
   const rec = (key: string, name: string, cwd: string, sessionId: string) => ({ key, name, kind: 'claude', cwd, workspace: 'w', logs: [], sessionId, started: 0 })
   writeJson('agents.json', { 'T-1/Agent': rec('T-1/Agent', 'shep-t-1', '/w/1', 's1'), 'T-2/Agent': rec('T-2/Agent', 'shep-t-2', '/w/2', 's2') })
 
+  /** what still runs is read after refresh() returns (a slow screen read must not hold up herdr's health check): wait
+   *  for that read to land, since it is what says an agent is at work */
+  const landing = async (a: InstanceType<typeof Agents>) => {
+    for (let i = 0, was = ''; i < 200; i++) {
+      const now = JSON.stringify(['T-1/Agent', 'T-2/Agent'].map((k) => a.background(k)))
+      if (now === was) return
+      was = now
+      await Bun.sleep(25)
+    }
+  }
+
   test('its session file says what still runs, else its screen; a change is told as a status change', async () => {
     session('busy')
     const a = new Agents()
     const told: string[] = []
     a.on('status', (key) => told.push(key))
     await a.refresh()
+    await landing(a)
+    // T-1 has a session file; T-2's screen is all it has
     expect(a.background('T-1/Agent')).toBe('agents')
     expect(a.background('T-2/Agent')).toBe('agents')
     // the reviewer finished, woke it, and it stopped again in between herdr's looks: told, though herdr saw nothing
@@ -153,6 +166,7 @@ describe('an agent whose turn ended', () => {
     a.sessions = new ClaudeSessions()
     screens.p2 = WOKE_AND_DONE
     await a.refresh()
+    await landing(a)
     expect(a.background('T-1/Agent')).toBeUndefined()
     expect(a.background('T-2/Agent')).toBeUndefined()
     expect(told.sort()).toEqual(['T-1/Agent', 'T-2/Agent'])
@@ -176,12 +190,14 @@ describe('an agent whose turn ended', () => {
     session('shell')
     const a = new Agents()
     await a.refresh()
+    await landing(a)
     expect(a.background('T-1/Agent')).toBe('shells')
     expect(a.background('T-1/Agent', Date.now() + a.shellsFor + 1)).toBeUndefined()
     const told: string[] = []
     a.on('status', (key) => told.push(key))
     a.shellsFor = 0
     await a.refresh()
+    await landing(a)
     expect(a.background('T-1/Agent')).toBeUndefined()
     expect(told).toEqual(['T-1/Agent'])
     a.stop()

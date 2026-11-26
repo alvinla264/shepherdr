@@ -331,7 +331,8 @@ describe('a machine run from the main one', () => {
 
 describe('a restart of the main server (an update)', () => {
   const saved = { id: 'far', label: 'far', target: 'far.invalid', session: 'default', enabled: true }
-  const snap = { name: 'S', host: 'far', places: [{ id: 'm:far', kind: 'machine', level: 1, name: 'far', machine: 'far', status: 'idle', mode: 'regular', chat: 'm:far' }, { id: 'p:far:web', kind: 'project', level: 2, name: 'web', machine: 'far', status: 'need', mode: 'regular', chat: 'p:far:web' }], tasks: [], automations: {}, asks: {}, settings: [], overrides: {}, user: 'u' }
+  // a worker's snapshot says its own herdr is up: an answering server whose herdr is down is not a healthy link
+  const snap = { name: 'S', host: 'far', places: [{ id: 'm:far', kind: 'machine', level: 1, name: 'far', machine: 'far', status: 'idle', mode: 'regular', chat: 'm:far' }, { id: 'p:far:web', kind: 'project', level: 2, name: 'web', machine: 'far', status: 'need', mode: 'regular', chat: 'p:far:web' }], machines: [{ id: 'm:far', machine: 'far', name: 'far', status: 'idle' }], tasks: [], automations: {}, asks: {}, settings: [], overrides: {}, user: 'u' }
 
   /** a worker left running from before the restart: a process of its own, serving its snapshot */
   function oldWorker() {
