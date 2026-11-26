@@ -2,6 +2,25 @@
 
 How to run, build and lay out the code: [docs/develop.md](docs/develop.md).
 
+## Commit messages
+
+Use Conventional Commits for every new commit: `<type>(<optional scope>): <description>` (for example,
+`fix(preview): reject files outside approved roots`). Mark breaking changes with `!` or a `BREAKING CHANGE:` footer.
+Include these sections in the commit body:
+
+```text
+[Problem]
+Describe the issue or need.
+
+[Solution]
+Describe what changed and why.
+
+[Self-Test Report]
+List checks actually performed and their results. State which checks were not run and why.
+```
+
+The self-test report must respect the test restrictions below; this format does not authorize additional checks.
+
 ## Tests
 
 - No tests on this machine: it keeps the CPU for herdr, the server and the agents. While you work and before you
