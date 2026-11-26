@@ -118,3 +118,29 @@ describe.skipIf(!browser)('settings', () => {
     }
   }, 30_000)
 })
+
+describe.skipIf(!browser)('chat agent choices', () => {
+  test('Agents says why only some CLIs can hold a chat, and offers only those for Tasks, Coordinators and Backup (phone)', async () => {
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    try {
+      await page.goto(url())
+      await page.getByRole('button', { name: 'Places' }).click()
+      await page.getByRole('button', { name: 'Settings', exact: true }).click()
+      const settings = page.getByRole('region', { name: 'Settings' })
+      await settings.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Agents', exact: true }).click()
+      const agents = settings.getByRole('region', { name: 'Agents' })
+      await agents.waitFor()
+      expect(await agents.textContent()).toContain('Chat choices need a chat log reader')
+      expect(await agents.textContent()).toContain('Headless review is separate')
+      for (const group of ['Tasks', 'Coordinators', 'Backup']) {
+        await agents.getByRole('heading', { name: group, exact: true }).locator('..').getByRole('button', { name: /^Agent: / }).click()
+        const offered = (await page.getByRole('menuitemradio').allTextContents()).map((v) => v.trim())
+        expect(offered.sort()).toEqual((group === 'Backup' ? ['Off', 'Claude Code', 'Codex', 'Pi'] : ['Claude Code', 'Codex', 'Pi']).sort())
+        await page.keyboard.press('Escape')
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+})

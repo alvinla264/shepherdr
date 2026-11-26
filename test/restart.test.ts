@@ -102,9 +102,10 @@ describe('what a chat launched on', () => {
     expect(harnessProblem({ kind: 'codex', model: 'retired-model' })).toContain('no available model')
     expect(harnessProblem({ kind: 'codex', model: 'claude-opus-5-5' })).toContain('no available model')
     expect(harnessProblem({ kind: 'codex', model: 'gpt-6-luna', effort: 'ultra' })).toContain('does not support')
-    expect(harnessProblem({ kind: 'gemini', effort: 'high' })).toContain('does not support')
-    // the CLI's own, and a CLI that lists its own models, are not refused
-    expect(harnessProblem({ kind: 'gemini', model: 'default', effort: 'default' })).toBeUndefined()
+    // a CLI with no chat log reader is refused for that first, before its models are looked at
+    expect(harnessProblem({ kind: 'gemini', effort: 'high' })).toContain('no chat log reader')
+    expect(harnessProblem({ kind: 'gemini', model: 'default', effort: 'default' })).toContain('no chat log reader')
+    // a CLI that lists its own models, and no level or model of its own, is not refused
     expect(harnessProblem({ kind: 'pi', model: 'provider/model', effort: 'high' })).toBeUndefined()
     expect(harnessProblem({ kind: 'codex', effort: 'high' })).toBeUndefined()
   })

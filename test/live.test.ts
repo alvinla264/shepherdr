@@ -540,8 +540,11 @@ describe('settings', () => {
     expect(s.set('reviewer.effort', 'ultra').ok).toBe(true)
     expect(s.set('reviewer.model', 'claude-opus-5-5').ok).toBe(false)
     for (const k of ['coordinator.model', 'reviewer.effort']) s.set(k, null)
-    // any agent herdr can start may be chosen, by its name or its kind; it is kept by its name
-    expect(s.set('task.agent', 'Qwen').ok).toBe(true)
+    // an agent that can hold a chat may be chosen, by its name or its kind, and is kept by its name; one with no log
+    // reader is refused in plain words
+    expect(s.set('task.agent', 'Qwen').error).toContain('no chat log reader')
+    expect(s.set('task.agent', 'Pi').ok).toBe(true)
+    expect(s.get('task.agent')).toBe('pi')
     expect(s.set('coordinator.agent', 'codex').ok).toBe(true)
     expect(s.get('coordinator.agent')).toBe('Codex')
     s.set('task.agent', null)
@@ -595,9 +598,9 @@ describe('settings', () => {
     expect(row('Tasks', 'Model').value).toBe('Opus 5.5')
     expect(row('Tasks', 'Effort').value).toBe('max')
     expect(s.harness('task')).toEqual({ kind: 'claude', model: 'claude-opus-5-5', effort: 'max' })
-    // a CLI Shepherdr passes neither to picks its own; the backup has its own model and effort
-    s.set('task.agent', 'Qwen')
-    expect(row('Tasks', 'Model')).toMatchObject({ value: "Qwen's own", fixed: true })
+    // a CLI with no chat log reader cannot take a task at all; the backup has its own model and effort
+    expect(s.set('task.agent', 'Qwen').error).toContain('no chat log reader')
+    expect(row('Tasks', 'Agent').options).toEqual(['Claude Code', 'Codex', 'pi'])
     expect(row('Backup', 'Model').options![1]).toBe('GPT-6.1-Sol')
     for (const k of ['task.agent', 'task.model', 'task.effort']) s.set(k, null)
   })
