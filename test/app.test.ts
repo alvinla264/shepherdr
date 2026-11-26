@@ -14,8 +14,11 @@ class Stub extends Emitter<SourceEvents> {
   snapshot() {
     return { name: 'x', host: 'h', places: [], tasks: [], automations: {}, artifacts: [], asks: {}, settings: [], user: 'u' }
   }
-  chat() {
-    return undefined
+  chat(key?: string) {
+    return key === 'p:h:~' ? ({ key, cli: 'codex', working: false, messages: [] } as unknown as ReturnType<Source['chat']>) : undefined
+  }
+  chatStatus(key: string) {
+    return key === 'p:h:~' ? 'idle' : undefined
   }
   async act(a: unknown) {
     acted.push(a)
@@ -242,6 +245,18 @@ describe('attached files', () => {
   test("only what the source says was attached; another website can't load it", async () => {
     expect((await get('/etc/passwd')).status).toBe(404)
     expect((await get('/inbox/c/x-shot.png', { 'sec-fetch-site': 'cross-site' })).status).toBe(403)
+  })
+})
+
+describe("reading a chat's owner view", () => {
+  test("the app's own page or a program here may read one chat and its status; another website may not", async () => {
+    const ok = await fetch(`${base}/api/chat?chat=${encodeURIComponent('p:h:~')}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ chat: { key: 'p:h:~', cli: 'codex', working: false, messages: [] }, status: 'idle' })
+    // an unknown chat is null, not an error
+    expect(await (await fetch(`${base}/api/chat?chat=nope`)).json()).toEqual({ chat: null, status: undefined })
+    expect((await fetch(`${base}/api/chat?chat=p:h:~`, { headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403)
+    expect((await fetch(`${base}/api/chat?chat=p:h:~`, { headers: { origin: 'https://evil.example' } })).status).toBe(403)
   })
 })
 
