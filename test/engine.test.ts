@@ -531,3 +531,75 @@ describe('restarting a task agent', () => {
     await expect(w.engine.restart(t.id, { kind: 'claude' })).rejects.toThrow('Done already')
   })
 })
+
+describe('a task whose agent started but whose private routing failed', () => {
+  const failure = 'Could not provision private agent command routing'
+  /** its CLI really runs (the same process was there), and provisioning the route to it failed */
+  async function unrouted(name: string) {
+    const w = world()
+    const ensure = w.agents.ensure
+    w.agents.ensure = async (s) => {
+      await ensure(s)
+      throw new Error(failure)
+    }
+    const { t, key } = await started(w, repo(), name)
+    await until(() => !!t.trouble)
+    return { w, t, key }
+  }
+  test('that error waits for a verified route and a live agent: a progress report alone leaves it, another error is never cleared', async () => {
+    const { w, t, key } = await unrouted('routing-stale')
+    expect(w.engine.view(t)).toMatchObject({ status: 'need', outcome: 'failed' })
+    expect(w.engine.view(t).sub).toContain('Went wrong:')
+    // it says it is at work, which is no proof that its command routing was ever provisioned
+    w.engine.report(t.id, 'Writing the evidence', 80)
+    expect(t.trouble).toBe(failure)
+    // the agent was checked and its route is bound now: that is what clears the startup error
+    w.routed[key] = true
+    w.engine.agentStatus(key)
+    w.engine.report(t.id, 'Still writing the evidence', 80)
+    expect(t.trouble).toBe(failure)
+    w.engine.routeRecovered(key)
+    expect(t.trouble).toBeUndefined()
+    expect(w.engine.statusOf(t)).toBe('work')
+    expect(w.engine.outcomeOf(t)).toBeUndefined()
+    // an error of another kind is a real failure, not a stale startup one
+    t.trouble = 'Could not make a worktree'
+    w.engine.routeRecovered(key)
+    expect(w.engine.outcomeOf(t)).toBe('failed')
+  })
+  test('its question or permission prompt still shows after the error clears', async () => {
+    const { w, t, key } = await unrouted('routing-question')
+    w.chat.card = 'ask'
+    w.chat.cardTitle = 'Which route?'
+    expect(w.engine.view(t)).toMatchObject({ status: 'need', outcome: 'failed', sub: 'Which route?' })
+    w.routed[key] = true
+    w.engine.routeRecovered(key)
+    // still needs you, with what it asks, and no longer as a startup failure
+    expect(w.engine.view(t)).toMatchObject({ status: 'need', sub: 'Which route?' })
+    expect(w.engine.outcomeOf(t)).toBeUndefined()
+    w.chat.card = undefined
+    w.chat.question = true
+    expect(w.engine.view(t)).toMatchObject({ status: 'need', sub: 'Which one?' })
+    w.chat.question = false
+    w.agentIs(key, 'blocked')
+    expect(w.engine.view(t)).toMatchObject({ status: 'need', sub: 'Asks permission' })
+  })
+  test('an agent that is gone is not brought back by a route or an old report', async () => {
+    const { w, t, key } = await unrouted('routing-gone')
+    w.routed[key] = true
+    w.agentIs(key, 'gone')
+    w.engine.routeRecovered(key)
+    w.engine.report(t.id, 'Writing the evidence', 80)
+    expect(w.engine.view(t)).toMatchObject({ status: 'need', outcome: 'failed' })
+    expect(t.trouble).toBe(failure)
+  })
+  test('once recovered, the task finishes as usual', async () => {
+    const { w, t, key } = await unrouted('routing-done')
+    w.routed[key] = true
+    w.engine.routeRecovered(key)
+    w.engine.report(t.id, 'Writing the evidence', 80)
+    expect(t.trouble).toBeUndefined()
+    expect(await w.engine.done(t.id, 'Investigation complete')).toBe('closed')
+    expect(w.engine.view(t)).toMatchObject({ status: 'done', outcome: 'done' })
+  })
+})
