@@ -15,6 +15,7 @@ import type { LogEvent } from './readers/types.ts'
 import type { Cut } from './retry.ts'
 import { findModel, modelsOf, nearest } from './models.ts'
 import { sameCommand } from './commands.ts'
+import { sessionRuntime } from './runtime.ts'
 import { launchHarness } from './restart.ts'
 import { CLI_NAME } from './settings.ts'
 import { replyOnScreen } from './streaming.ts'
@@ -930,6 +931,14 @@ export class Chats {
     }
     const st = this.agents.status(key)
     const failed = this.agents.failedLately(key)
+    const active = this.agents.info(key)?.agent_session
+    const file = active?.kind === 'path' ? r?.logs.find((f) => f.endsWith('/' + active.value.split('/').at(-1)))
+      : r?.sessionId ? r.logs.find((f) => f.endsWith(`${r.sessionId}.jsonl`)) : r?.logs.at(-1)
+    let runtime = sessionRuntime(ev, file, r?.started ?? 0)
+    if (st !== 'working' || !runtime) runtime = this.agents.runtime(key) ?? runtime
+    const hook = this.agents.runtimeHook(key)
+    if (hook) runtime = !runtime || hook.at >= runtime.at ? { ...(hook.model && runtime?.model && hook.model !== runtime.model ? {} : runtime), ...hook, source: 'hook' } : { ...(hook.model && runtime.model && hook.model !== runtime.model ? {} : hook), ...runtime }
+    if (runtime?.model) runtime.modelLabel = findModel(kind, runtime.model)?.label
     const jobs = this.jobs(key, act).map(({ log: _l, output: _o, ...j }): Job => j)
     // what it launched on, as args passed it then: a later catalog does not rewrite it. A record kept from before this
     // was stored resolves it now, once
@@ -938,7 +947,7 @@ export class Chats {
     return {
       key,
       cli: CLI_NAME[kind] ?? kind,
-      agent: launched ? { ...launched, ...(launchedAs ? { modelLabel: launchedAs.label } : {}) } : undefined,
+      agent: launched ? { runtime, ...launched, ...(launchedAs ? { modelLabel: launchedAs.label } : {}) } : undefined,
       messages: msgs,
       failed: failed.length ? failed : undefined,
       working: st === 'working' || undefined,

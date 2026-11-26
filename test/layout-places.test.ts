@@ -307,8 +307,9 @@ describe.skipIf(!browser)("a place's Autopilot", () => {
     const controls = page.locator('[data-agent-controls]').first()
     await controls.waitFor()
     expect(await controls.getByRole('menuitem', { name: /^Agent: / }).count()).toBe(1)
-    expect(await controls.getByRole('menuitem', { name: 'Model: Opus 5.5. Select and restart' }).count()).toBe(1)
-    expect(await controls.getByRole('menuitem', { name: 'Effort: high. Select and restart' }).count()).toBe(1)
+    // its launch is recorded, but nothing reports what its CLI runs on now
+    expect(await controls.getByRole('menuitem', { name: 'Model: Not reported. Select and restart' }).count()).toBe(1)
+    expect(await controls.getByRole('menuitem', { name: 'Effort: Not reported. Select and restart' }).count()).toBe(1)
     // each row fits the small screen, with no model or effort changed silently
     for (const b of (await controls.locator('[role=menuitem]').evaluateAll((bs) => bs.map((b) => b.getBoundingClientRect().toJSON()))) as { left: number; right: number }[]) {
       expect(b.left).toBeGreaterThanOrEqual(0)

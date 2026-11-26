@@ -16,7 +16,7 @@ const parse = (cli: string, objs: object[]) =>
 // token usage, turn starts and steps are checked on their own below; the other tests read the conversation
 const STEPS = new Set(['step', 'step-end', 'job', 'job-end'])
 const brief = (ev: LogEvent[]) =>
-  ev.filter((e) => e.kind !== 'usage' && e.kind !== 'turn-start' && !STEPS.has(e.kind)).map((e) =>
+  ev.filter((e) => e.kind !== 'runtime' && e.kind !== 'usage' && e.kind !== 'turn-start' && !STEPS.has(e.kind)).map((e) =>
     e.kind === 'user' || e.kind === 'agent' ? `${e.kind}:${e.text}` : e.kind === 'question' ? `question:${e.id}` : `${e.kind}:${e.id}`,
   )
 
@@ -96,7 +96,7 @@ describe('claude reader', () => {
       'turn-end:turn-msg_B',
     ])
     expect(ev[0]).toMatchObject({ kind: 'session', sessionId: S })
-    expect(ev.filter((e) => e.kind !== 'usage' && e.kind !== 'turn-start' && !STEPS.has(e.kind))[5].id).toBe('msg_B')
+    expect(ev.filter((e) => e.kind !== 'runtime' && e.kind !== 'usage' && e.kind !== 'turn-start' && !STEPS.has(e.kind))[5].id).toBe('msg_B')
   })
 
   test('a command Claude Code runs itself reads as typed, with what it printed as its answer, and starts no turn', () => {
@@ -150,6 +150,24 @@ describe('claude reader', () => {
       cuser('u2', '<pasted_content id="12">\nline one\nline two\n</pasted_content id="12">', typed),
     ])
     expect(brief(ev).slice(1)).toEqual(['user:/review the login page', 'user:and the signup page', 'user:line one\nline two'])
+  })
+
+  test('records the model a reply ran on, never a subagent\u2019s or a synthetic error model', () => {
+    const reply = (uuid: string, model: string, extra: object = {}) => ({
+      ...cassistant(uuid, `msg_${uuid}`, { type: 'text', text: `reply ${uuid}` }, 'end_turn'),
+      message: { ...cassistant(uuid, `msg_${uuid}`, { type: 'text', text: `reply ${uuid}` }, 'end_turn').message, model },
+      ...extra,
+    })
+    const ev = parse('claude', [
+      cuser('u1', 'Make the button blue', typed),
+      reply('a1', 'claude-opus-5-5'),
+      // a subagent's own model, an error's synthetic one: not what this chat runs on
+      reply('a2', 'claude-haiku-4-5', { isSidechain: true }),
+      reply('a3', '<synthetic>', { isApiErrorMessage: true }),
+    ])
+    const runtime = ev.filter((e) => e.kind === 'runtime')
+    expect(runtime).toHaveLength(1)
+    expect(runtime[0]).toMatchObject({ file: '/logs/claude.jsonl', runtime: { model: 'claude-opus-5-5', source: 'session' } })
   })
 
   test('AskUserQuestion becomes a question, its tool result marks it answered', () => {
@@ -285,6 +303,26 @@ describe('codex reader', () => {
     expect(ev.find((e) => e.kind === 'user')!.id).toBe('msg_u1')
   })
 
+  test('a turn context says the model and effort it runs with, each turn replacing the last', () => {
+    const ev = parse('codex', [
+      sessionMeta('/work/app'),
+      cxmsg('msg_u1', 'user', [{ type: 'input_text', text: 'Add a dark mode' }], ['user.text']),
+      line('turn_context', { turn_id: 'turn-1', model: 'gpt-6-sol', effort: 'high', summary: 'auto' }),
+      cxmsg('msg_a1', 'assistant', [{ type: 'output_text', text: 'Dark mode is in.', annotations: [] }]),
+      // the next turn: an older log with the effort under another name, then one that sets neither
+      line('turn_context', { turn_id: 'turn-2', model: 'gpt-6-sol', collaboration_mode: { mode: 'default', settings: { reasoning_effort: 'low' } } }),
+      line('turn_context', { turn_id: 'turn-3', model: 'default' }),
+    ])
+    const runtime = ev.filter((e) => e.kind === 'runtime')
+    expect(runtime.map((e) => e.kind === 'runtime' && e.runtime)).toEqual([
+      { source: 'session', at: runtime[0]!.at, model: 'gpt-6-sol', effort: 'high' },
+      { source: 'session', at: runtime[1]!.at, model: 'gpt-6-sol', effort: 'low' },
+      // a full snapshot: an unset model and effort are not the previous turn's
+      { source: 'session', at: runtime[2]!.at },
+    ])
+    expect(runtime.every((e) => e.kind === 'runtime' && e.replace === true)).toBe(true)
+  })
+
   test('request_user_input: a question, answered by its output; the async one by the next prompt', () => {
     const ev = parse('codex', [
       sessionMeta('/work/app'),
@@ -387,6 +425,22 @@ describe('pi reader', () => {
       'user:/skill:review the parser',
     ])
     expect(ev[0]).toMatchObject({ sessionId: 'sw-0001' })
+  })
+
+  test('a model or thinking-level change says what it now runs with, and a reply says the model it used', () => {
+    const ev = parse('pi', [
+      { type: 'session', version: 3, id: 'sw-0002', timestamp: '2026-10-13T20:52:53.359Z', cwd: '/work/app' },
+      { type: 'model_change', id: 'm1', parentId: null, timestamp: ts(), provider: 'openai', modelId: 'gpt' },
+      { type: 'thinking_level_change', id: 'm2', parentId: 'm1', timestamp: ts(), thinkingLevel: 'off' },
+      pimsg('e2', 'm2', { role: 'assistant', content: [{ type: 'text', text: 'Done.' }], model: 'gpt-6.1-sol', usage: {}, stopReason: 'stop', timestamp: 3 }),
+    ])
+    const runtime = ev.filter((e) => e.kind === 'runtime')
+    expect(runtime.map((e) => e.kind === 'runtime' && e.runtime)).toEqual([
+      { source: 'session', at: runtime[0]!.at, model: 'gpt' },
+      { source: 'session', at: runtime[1]!.at, effort: 'off' },
+      // the reply names the model the CLI actually used, which a model_change may not
+      { source: 'session', at: runtime[2]!.at, model: 'gpt-6.1-sol' },
+    ])
   })
 })
 

@@ -260,6 +260,9 @@ function world(kind: 'claude' | 'codex', status: () => string, runs: () => strin
     failedLately: () => [],
     holdOf: () => undefined,
     info: () => undefined,
+    // nothing observed the model or effort it runs on
+    runtime: () => undefined,
+    runtimeHook: () => undefined,
   }
   const chats = new Chats(agents as never, (k) => k, () => 'You')
   const add = (...objs: object[]) => appendFileSync(log, objs.map((o) => `${JSON.stringify(o)}\n`).join(''))

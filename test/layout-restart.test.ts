@@ -42,7 +42,7 @@ describe.skipIf(!browser)('restarting an agent', () => {
     }
   }, 30_000)
 
-  test('a launch with no recorded model or effort says so inside +, and closing the menu changes nothing', async () => {
+  test('a launch with nothing the CLI reports says so inside +, and closing the menu changes nothing', async () => {
     const key = 'GTM-17/Agent'
     const was = world.chats[key].agent
     const wasCli = world.chats[key].cli
@@ -53,8 +53,8 @@ describe.skipIf(!browser)('restarting an agent', () => {
       await page.goto(`http://127.0.0.1:${server!.port}/?place=all&task=GTM-17`)
       await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
       const controls = page.locator('[data-agent-controls]').last()
-      await controls.getByRole('menuitem', { name: 'Model: Default / unknown. Select and restart', exact: true }).waitFor()
-      expect(await controls.getByRole('menuitem', { name: 'Effort: Default / unknown. Select and restart', exact: true }).count()).toBe(1)
+      await controls.getByRole('menuitem', { name: 'Model: Not reported. Select and restart', exact: true }).waitFor()
+      expect(await controls.getByRole('menuitem', { name: 'Effort: Not reported. Select and restart', exact: true }).count()).toBe(1)
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
       // closing + puts the composer back as it was
       await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
@@ -93,6 +93,58 @@ describe.skipIf(!browser)('restarting an agent', () => {
     await sheet.waitFor({ state: 'detached' })
     expect(world.chats['GTM-17/Agent'].messages.at(-1)?.card).toMatchObject({ restart: true, text: 'Restarted on Codex (GPT-6-Sol, high)' })
     await page.close()
+  }, 30_000)
+
+  test('the + menu names what the CLI reports, in a task chat and a coordinator chat, and never changes the launch', async () => {
+    const p = world.snapshot().places.find((x) => !x.home)!
+    for (const task of [false, true]) {
+      const chat = task ? 'GTM-17/Agent' : p.chat
+      const was = world.chats[chat].agent
+      const wasCli = world.chats[chat].cli
+      // the launch stays what it was started with; what the CLI reports now is what the menu shows
+      world.chats[chat].agent = { kind: 'codex', model: 'gpt-6-sol', modelLabel: 'GPT-6-Sol', effort: 'low', runtime: { model: 'gpt-6.1-sol', modelLabel: 'GPT-6.1-Sol', effort: 'high', source: 'session', at: Date.now() } }
+      world.chats[chat].cli = 'Codex'
+      const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
+      try {
+        await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent(p.id)}${task ? '&task=GTM-17' : ''}`)
+        // a docked task brings its own composer: the first is the chat on screen
+        await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
+        const controls = page.locator('[data-agent-controls]').last()
+        await controls.getByRole('menuitem', { name: 'Model: GPT-6.1-Sol. Select and restart', exact: true }).waitFor()
+        expect(await controls.getByRole('menuitem', { name: 'Effort: High. Select and restart', exact: true }).count()).toBe(1)
+        expect(world.chats[chat].agent).toMatchObject({ model: 'gpt-6-sol', effort: 'low' })
+        // Default is still a model to pick in the sheet
+        await controls.getByRole('menuitem', { name: /^Model: / }).click()
+        const sheet = page.getByRole('alertdialog')
+        await sheet.locator('[data-restart]').waitFor()
+        await sheet.getByRole('button', { name: /^Model: / }).click()
+        expect(await page.getByRole('menuitemradio', { name: 'Default', exact: true }).count()).toBe(1)
+        await page.getByRole('menuitemradio', { name: 'Default', exact: true }).click()
+        expect(await sheet.getByRole('button', { name: /^Model: / }).textContent()).toContain('Default')
+        await sheet.getByRole('button', { name: 'Cancel' }).click()
+      } finally {
+        world.chats[chat].agent = was
+        world.chats[chat].cli = wasCli
+        await page.close()
+      }
+    }
+  }, 30_000)
+
+  test('an effort its CLI reports as unsupported says Not supported, not a level it might be on', async () => {
+    const key = 'GTM-17/Agent'
+    const was = world.chats[key].agent
+    world.chats[key].agent = { kind: 'codex', runtime: { model: 'gpt-6-sol', effortUnsupported: true, source: 'session', at: Date.now() } }
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
+    try {
+      await page.goto(`http://127.0.0.1:${server!.port}/?place=p:vm-str:gtm&task=GTM-17`)
+      await page.locator('[data-composer] button[aria-label="Attach files and more"]').first().click()
+      const controls = page.locator('[data-agent-controls]').last()
+      await controls.getByRole('menuitem', { name: 'Effort: Not supported. Select and restart', exact: true }).waitFor()
+      expect(await controls.getByRole('menuitem', { name: 'Model: gpt-6-sol. Select and restart', exact: true }).count()).toBe(1)
+    } finally {
+      world.chats[key].agent = was
+      await page.close()
+    }
   }, 30_000)
 
   test('the sheet fits a phone, and Cancel leaves the agent as it was', async () => {
