@@ -13,6 +13,7 @@ import {
   openArtifact,
   openSplit,
   panesHere,
+  placesDocked,
   sizePanes,
   focusHere,
   getState,
@@ -231,7 +232,8 @@ function Drawer() {
 
 function MenuButton() {
   const device = useUI((u) => u.device)
-  if (device === 'desktop') return null
+  const docked = useStore((s) => placesDocked(s.ui, s.snap))
+  if (docked) return null
   return device === 'phone' ? (
     <RoundButton label="Places" onClick={() => setUI({ drawer: true })}>
       <MenuIcon className={ic} />
@@ -294,7 +296,7 @@ function PlaceColumn({ place, pane }: { place: Place; pane?: number }) {
   const Chat = registry.views.chat
   return (
     <section data-drawer-from className="@container/place flex min-h-0 min-w-0 flex-1 flex-col">
-      <Head>
+      <Head conversation>
         <MenuButton />
         {pane ? null : <PlacesToggle when="closed" />}
         <Who
@@ -471,8 +473,8 @@ function TaskPage({ task, middle, pane }: { task: Task; middle?: boolean; pane?:
   if (pane !== undefined)
     return (
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <Head>
-          {pane ? null : <PlacesToggle when="closed" />}
+        <Head conversation>
+          {pane ? null : <><MenuButton /><PlacesToggle when="closed" /></>}
           <Dot s={task.status} p={task.report?.progress} halo />
           <Who name={task.name} kind={task.report ? <span className="flex min-w-0 gap-1">{task.id} ·<ReportLine w={task.report} head /></span> : `${task.id} · ${coordinator}`} />
           <div className="flex shrink-0 items-center gap-1">
@@ -491,7 +493,7 @@ function TaskPage({ task, middle, pane }: { task: Task; middle?: boolean; pane?:
       onFocusCapture={split && !middle ? () => focusPane(-1) : undefined}
       className={clsx('flex min-h-0 min-w-0 flex-1 flex-col border-line', !focus && !middle && 'border-l')}
     >
-      <Head>
+      <Head conversation>
         {middle ? (
           <>
             <MenuButton />
@@ -602,9 +604,9 @@ function TasksPane({ place, i }: { place: Place; i: number }) {
   const TasksMenu = registry.views.tasksMenu
   const c = counts(snap, place.id)
   return (
-    <section aria-label={`Tasks of ${place.name}`} className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section data-drawer-from aria-label={`Tasks of ${place.name}`} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <Head>
-        {i ? null : <PlacesToggle when="closed" />}
+        {i ? null : <><MenuButton /><PlacesToggle when="closed" /></>}
         <TasksIcon className={clsx(ic, 'text-fg2')} />
         <Who name={<span className="flex items-center gap-1.5">Tasks<Count n={c.tasks} label={`${c.tasks} waiting on you`} /></span>} kind={placeKind(snap, place) ? `${place.name} · ${placeKind(snap, place)}` : place.name} />
         {TasksMenu ? <TasksMenu key={place.id} place={place} /> : null}
@@ -622,9 +624,9 @@ function ArtifactPane({ id, i }: { id: string; i: number }) {
   const View = registry.views.artifact
   if (!art) return <GonePane i={i} what="This artifact is gone." />
   return (
-    <section aria-label={art.title} className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section data-drawer-from aria-label={art.title} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <Head>
-        {i ? null : <PlacesToggle when="closed" />}
+        {i ? null : <><MenuButton /><PlacesToggle when="closed" /></>}
         <PageIcon className={clsx(ic, 'text-fg2')} />
         <Who name={art.title} kind={`${placeOf(snap, art.place).name} · v${art.v} · ${art.when}`} />
         <IconButton label="Open full screen" onClick={() => openArtifact(art.id)}>
@@ -721,6 +723,7 @@ function Divider({ at, box }: { at: number; box: RefObject<HTMLDivElement | null
 function WideLayout({ snap }: { snap: Snapshot }) {
   const settings = useUI((u) => !!u.settings)
   const desktop = useUI((u) => u.device === 'desktop')
+  const docked = useStore((s) => placesDocked(s.ui, s.snap))
   // the open task whose side panel has a column here
   const panel = useUI((u) => (panelHere(u, snap) ? u.task : null))
   const Settings = registry.views.settings
@@ -729,6 +732,7 @@ function WideLayout({ snap }: { snap: Snapshot }) {
       <Frame places>
         <Sidebar />
         <Settings />
+        {!docked ? <Drawer /> : null}
       </Frame>
     )
   if (desktop) {
@@ -738,6 +742,7 @@ function WideLayout({ snap }: { snap: Snapshot }) {
         <Sidebar />
         <Middle snap={snap} />
         <TaskColumn snap={snap} />
+        {!docked ? <Drawer /> : null}
         {task ? (
           <PanelColumn>
             <TaskPanel task={task} />

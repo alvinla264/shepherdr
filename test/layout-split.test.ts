@@ -87,6 +87,28 @@ describe.skipIf(!browser)('split view', () => {
     await page.close()
   }, 30_000)
 
+  test('a Tasks pane on a narrow desktop keeps the Places drawer in reach', async () => {
+    const page = await browser!.newPage({ viewport: { width: 1440, height: 850 } })
+    await page.goto(at('place=vm-str/home'))
+    await page.getByRole('textbox', { name: 'Message home…' }).waitFor()
+    const gtm = page.locator('#places li[data-project="p:vm-str:gtm"]')
+    await gtm.hover()
+    await gtm.getByRole('button', { name: 'More for gtm' }).click()
+    await page.getByRole('menuitem', { name: 'Open its tasks in split view' }).click()
+    const tasks = page.getByRole('region', { name: 'Tasks of gtm', exact: true })
+    await tasks.waitFor()
+    // the first pane closes: the Tasks pane is the only one, so it takes the first pane's Places control
+    await page.locator('[data-pane="0"]').getByRole('button', { name: 'Close pane' }).click()
+    await tasks.waitFor()
+    // narrowed, places become a drawer: this pane offers it rather than losing the way back
+    await page.setViewportSize({ width: 1100, height: 850 })
+    await tasks.getByRole('button', { name: 'Places', exact: true }).click()
+    await page.getByRole('navigation', { name: 'Places' }).last().waitFor()
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.getByRole('button', { name: 'Close', exact: true }).click()
+    await page.close()
+  }, 30_000)
+
   test('an artifact from its card, and a phone with panes kept shows one at a time', async () => {
     const ctx = await browser!.newContext({ viewport: { width: 1600, height: 900 } })
     const page = await ctx.newPage()

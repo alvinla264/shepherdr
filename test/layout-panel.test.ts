@@ -11,6 +11,28 @@ describe.skipIf(!browser)("a task's side panel", () => {
   const task = (id: string) => `http://127.0.0.1:${server!.port}/?place=p:vm-str:gtm&task=${id}`
   const width = (page: Page, sel: string) => page.$eval(sel, (el) => Math.round(el.getBoundingClientRect().width))
 
+  test('a tool kept open while the window narrows leaves the task chat readable, and widening opens no tool', async () => {
+    const page = await browser!.newPage({ viewport: { width: 1920, height: 900 } })
+    await page.goto(task('GTM-14'))
+    await page.getByRole('button', { name: 'Show task panel', exact: true }).click()
+    await page.getByRole('button', { name: 'Hide gtm', exact: true }).waitFor()
+    await page.setViewportSize({ width: 1024, height: 850 })
+    await settled(page)
+    await page.getByRole('button', { name: 'Show gtm', exact: true }).waitFor()
+    const chat = page.locator('section:has(textarea[aria-label="Message GTM-14…"])').last()
+    expect((await chat.boundingBox())!.width).toBeGreaterThanOrEqual(360)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1024)
+    // the coordinator gets its room back, and the tool closes with it
+    await page.getByRole('button', { name: 'Show gtm', exact: true }).click()
+    await page.getByRole('button', { name: 'Show task panel', exact: true }).waitFor()
+    await page.getByRole('textbox', { name: 'Message gtm…' }).waitFor()
+    // room alone never opens the tool again
+    await page.setViewportSize({ width: 2560, height: 1000 })
+    await settled(page)
+    expect(await page.getByRole('button', { name: 'Show task panel', exact: true }).count()).toBe(1)
+    await page.close()
+  }, 30_000)
+
   test('a toggle in the task header opens it beside the chat; its width and item stay after a reload (desktop)', async () => {
     const page = await browser!.newPage({ viewport: { width: 1600, height: 900 } })
     await page.goto(task('GTM-15'))

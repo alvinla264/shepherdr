@@ -141,6 +141,33 @@ describe.skipIf(!browser)('sidebars', () => {
     await page.close()
   }, 30_000)
 
+  test('the window chooses a places drawer or a dock by the room its columns need, and keeps that choice across resizes', async () => {
+    const page = await browser!.newPage({ viewport: { width: 1024, height: 850 } })
+    await page.goto(url())
+    await page.getByRole('textbox', { name: 'Message home…' }).waitFor()
+    for (const w of [820, 1024, 1100, 1180, 1440]) {
+      await page.setViewportSize({ width: w, height: 850 })
+      await settled(page)
+      const docked = w >= 1180
+      expect(await page.getByRole('button', { name: 'Hide Places', exact: true }).count()).toBe(docked ? 1 : 0)
+      expect(await page.getByRole('button', { name: 'Places', exact: true }).count()).toBe(docked ? 0 : 1)
+      expect(await page.locator('[data-messages]').first().evaluate((e) => e.getBoundingClientRect().width)).toBeGreaterThanOrEqual(480)
+      if (!docked) {
+        await page.getByRole('button', { name: 'Places', exact: true }).click()
+        await page.getByRole('navigation', { name: 'Places' }).last().waitFor()
+        await page.getByRole('button', { name: 'Close', exact: true }).click()
+      }
+    }
+    // a drawer left open while widening does not come back when the window narrows again
+    await page.getByRole('button', { name: 'Hide Places', exact: true }).click()
+    await page.setViewportSize({ width: 1100, height: 850 })
+    await settled(page)
+    expect(await page.getByRole('button', { name: 'Close', exact: true }).count()).toBe(0)
+    await page.getByRole('button', { name: 'Places', exact: true }).click()
+    await page.getByRole('button', { name: 'Close', exact: true }).waitFor()
+    await page.close()
+  }, 30_000)
+
   test('a tablet resizes tasks only; a phone keeps its drawer', async () => {
     const tablet = await browser!.newPage({ viewport: { width: 900, height: 800 } })
     await tablet.goto(url())
@@ -149,7 +176,7 @@ describe.skipIf(!browser)('sidebars', () => {
     expect(await tablet.getByRole('button', { name: /^(Hide|Show) Places$/ }).count()).toBe(0)
     const before = await width(tablet, tasks)
     await drag(tablet, 'Resize tasks', -40)
-    expect(await width(tablet, tasks)).toBe(before + 40)
+    expect(await width(tablet, tasks)).toBe(Math.min(before + 40, 900 - 480))
     await tablet.close()
     const phone = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
     await phone.goto(url())

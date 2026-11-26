@@ -123,17 +123,19 @@ describe.skipIf(!browser)('the place header', () => {
       const bar = title.closest('.border-b')!
       // the place's icon (SHE-207) before its name: on a phone the two are centred together
       const icon = title.querySelector('svg')?.getBoundingClientRect()
-      return { dots: bar.querySelectorAll('.dot').length, icon: icon?.toJSON() as Box | undefined, bar: bar.getBoundingClientRect().toJSON() as Box, title: title.getBoundingClientRect().toJSON() as Box, name: (title.querySelector('span') ?? title).getBoundingClientRect().toJSON() as Box }
+      // a conversation's header follows its messages, not the whole column
+      const reading = (bar.querySelector('[data-conversation-head]') ?? bar).getBoundingClientRect().toJSON() as Box
+      return { reading, dots: bar.querySelectorAll('.dot').length, icon: icon?.toJSON() as Box | undefined, bar: bar.getBoundingClientRect().toJSON() as Box, title: title.getBoundingClientRect().toJSON() as Box, name: (title.querySelector('span') ?? title).getBoundingClientRect().toJSON() as Box }
     })
 
   test('no status dot before the place name, the title still sits right', async () => {
-    // desktop with its sidebar open: the title starts at the header's own padding
+    // desktop with its sidebar open: the title starts at the reading column's padding
     const desk = await browser!.newPage({ viewport: { width: 1440, height: 800 } })
     await desk.goto(url())
     await desk.waitForSelector('#places li')
     const d = await head(desk)
     expect(d.dots).toBe(0)
-    expect(Math.abs(d.title.left - d.bar.left - 16)).toBeLessThan(0.5)
+    expect(Math.abs(d.title.left - d.reading.left - 20)).toBeLessThan(0.5)
     await desk.close()
     // a tablet: the title right after the Places button
     const tablet = await browser!.newPage({ viewport: { width: 900, height: 800 } })
@@ -153,6 +155,22 @@ describe.skipIf(!browser)('the place header', () => {
     expect(Math.abs((p.icon!.left + p.name.right) / 2 - 195)).toBeLessThan(1)
     await phone.close()
   }, 30_000)
+})
+
+describe.skipIf(!browser)('wide conversation headers', () => {
+  test('a very wide window keeps the place and task headers over the messages column', async () => {
+    const page = await browser!.newPage({ viewport: { width: 2560, height: 1000 } })
+    await page.goto(url())
+    await page.getByRole('textbox', { name: 'Message home…' }).waitFor()
+    const overMessages = (which: number) =>
+      page.locator('[data-conversation-head]').nth(which).evaluate((head) => {
+        const messages = head.closest('section')!.querySelector('[data-messages]')!
+        const h = head.getBoundingClientRect(), m = messages.getBoundingClientRect()
+        return Math.abs(h.left - m.left) < 1 && Math.abs(h.width - m.width) < 1
+      })
+    expect(await overMessages(0)).toBe(true)
+    await page.close()
+  })
 })
 
 describe.skipIf(!browser)('the Tasks header', () => {
