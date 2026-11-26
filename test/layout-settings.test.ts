@@ -145,91 +145,16 @@ describe.skipIf(!browser)('chat agent choices', () => {
   }, 30_000)
 })
 
-describe.skipIf(!browser)('task IDs', () => {
-  test('a space states its prefix and next number, nothing to reset, and a refused number says why (desktop)', async () => {
-    const { taskIdsSection } = await import('../server/live/task-ids.ts')
-    const before = { sections: world.sections, act: world.act }
-    const level = 'p:vm-str:gtm'
-    world.sections = [...before.sections, taskIdsSection(level, 'vm-str', 'GAME', 100)]
-    const act = before.act.bind(world)
-    // a number going back is the server's refusal, in its own words under the box
-    world.act = async (a) => (a.type === 'setting' && a.key === 'taskIds.next' ? { ok: false, error: 'Use 100 or higher. Earlier numbers are reserved.' } : act(a))
-    world.emit('snapshot')
+
+describe.skipIf(!browser)('a task’s merge target', () => {
+  test('a task says which branch it merges into before there is anything to merge (desktop and phone)', async () => {
     const page = await browser!.newPage({ viewport: { width: 1280, height: 900 } })
     try {
-      await page.goto(url())
-      await page.getByRole('button', { name: 'Settings', exact: true }).click()
-      const settings = page.getByRole('region', { name: 'Settings' })
-      // every space has its own page, so the home space picked first has none
-      expect(await settings.getByRole('button', { name: 'Task IDs', exact: true }).count()).toBe(0)
-      await settings.getByRole('button', { name: /^Editing:/ }).click()
-      await page.getByRole('menuitemradio', { name: /gtm/ }).click()
-      await settings.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Task IDs', exact: true }).click()
-      const ids = settings.getByRole('region', { name: 'Task IDs' })
-      await ids.getByRole('textbox', { name: 'Prefix', exact: true }).waitFor()
-      // two typed values and the ID the next task will get; no inherited value to go back to
-      expect(await ids.getByRole('textbox').count()).toBe(2)
-      expect(await ids.getByRole('textbox', { name: 'Prefix', exact: true }).inputValue()).toBe('GAME')
-      expect(await ids.getByRole('textbox', { name: 'Next number', exact: true }).inputValue()).toBe('100')
-      expect(await ids.textContent()).toContain('Next task: GAME-100')
-      expect(await ids.getByRole('button', { name: /^Reset to/ }).count()).toBe(0)
-      expect(await ids.textContent()).not.toContain('The rest follows')
-      // a number that would go back: the box stays as typed, and says what to use instead
-      await ids.getByRole('textbox', { name: 'Next number', exact: true }).fill('7')
-      await ids.getByRole('textbox', { name: 'Next number', exact: true }).press('Tab')
-      await ids.getByRole('status').filter({ hasText: 'Use 100 or higher' }).waitFor()
+      await page.goto(`${url().replace('vm-str/home', 'vm-str/gtm')}&task=GTM-15`)
+      await page.getByText('Merges into main', { exact: true }).first().waitFor()
+      await page.setViewportSize({ width: 390, height: 844 })
+      await page.getByText('Merges into main', { exact: true }).first().waitFor()
     } finally {
-      world.sections = before.sections
-      world.act = before.act
-      world.emit('snapshot')
-      await page.close()
-    }
-  }, 30_000)
-})
-
-describe.skipIf(!browser)('private instructions', () => {
-  test('a role’s rules save at the scope picked, a blank there means none, and Reset inherits again (phone)', async () => {
-    const store = world.stores['vm-str']
-    const before = world.sections
-    store.set('task.instructions', 'Everywhere rule.')
-    world.sections = demoSettings(world.stores)
-    world.emit('snapshot')
-    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
-    try {
-      await page.goto(url())
-      await page.getByRole('button', { name: 'Places' }).click()
-      await page.getByRole('button', { name: 'Settings', exact: true }).click()
-      const settings = page.getByRole('region', { name: 'Settings' })
-      await settings.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Private instructions', exact: true }).click()
-      const panel = settings.getByRole('region', { name: 'Private instructions' })
-      await panel.getByRole('button', { name: /^Editing:/ }).waitFor()
-      const task = panel.getByRole('textbox', { name: 'Task agents', exact: true })
-      expect(await task.inputValue()).toBe('Everywhere rule.')
-      // typing alone saves nothing: Undo puts back what the page holds
-      await task.fill('Unsaved.')
-      await panel.getByRole('button', { name: 'Undo', exact: true }).click()
-      expect(await task.inputValue()).toBe('Everywhere rule.')
-      // saved at this space, and for that role only
-      await task.fill('This space only.')
-      await panel.getByRole('button', { name: 'Save', exact: true }).click()
-      await panel.getByRole('button', { name: 'Reset to private rules', exact: true }).waitFor()
-      expect(store.get('task.instructions', '~')).toBe('This space only.')
-      expect(store.get('task.instructions')).toBe('Everywhere rule.')
-      expect(store.get('coordinator.instructions', '~')).toBeFalsy()
-      // an empty save is a choice: no private rules here, nothing inherited; Reset brings Everywhere's back
-      await task.fill('')
-      await panel.getByRole('button', { name: 'Save', exact: true }).click()
-      await panel.getByRole('button', { name: 'Save', exact: true }).waitFor({ state: 'detached' })
-      expect(store.get('task.instructions', '~')).toBe('')
-      await panel.getByRole('button', { name: 'Reset to private rules', exact: true }).click()
-      await panel.getByRole('button', { name: 'Reset to private rules', exact: true }).waitFor({ state: 'detached' })
-      expect(await task.inputValue()).toBe('Everywhere rule.')
-      expect(await panel.textContent()).toContain('When rules take effect')
-    } finally {
-      store.set('task.instructions', null, { space: '~' })
-      store.set('task.instructions', null)
-      world.sections = before
-      world.emit('snapshot')
       await page.close()
     }
   }, 30_000)

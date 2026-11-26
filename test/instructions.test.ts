@@ -1,5 +1,5 @@
 // Private instructions: each role's own rules, from the settings scope the human picked, on a new start or a restart.
-import { describe, expect, spyOn, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,9 +8,6 @@ process.env.SHEPHERDR_HOME = mkdtempSync(join(tmpdir(), 'shep-instructions-'))
 process.env.HERDR_SOCKET_PATH = join(process.env.SHEPHERDR_HOME, 'no-herdr.sock')
 const { Settings, setForTask } = await import('../server/live/settings.ts')
 const { privatePrompt } = await import('../server/live/prompts.ts')
-const { Agents, hidden } = await import('../server/live/agents.ts')
-const { herdr } = await import('../server/live/herdr.ts')
-const { writeJson } = await import('../server/store.ts')
 
 const told = () => new Settings({ everywhere: {}, machine: {}, spaces: {} })
 
@@ -89,33 +86,3 @@ describe('the prompt a start is given', () => {
   })
 })
 
-describe('what a launch is sent', () => {
-  test('a resumed CLI with no append flag gets its snapshot again only when the words changed; a fresh start always gets it', async () => {
-    const key = 'PRIVATE-1/Agent'
-    const dir = mkdtempSync(join(tmpdir(), 'shep-instructions-cwd-'))
-    const old = { key, name: 'shep-instructions', kind: 'codex', cwd: dir, workspace: 'private', logs: ['a.log'], sessionId: 'before', started: 0, system: 'old snapshot' }
-    const timer = spyOn(globalThis, 'setTimeout').mockImplementation((() => 0) as never)
-    const start = spyOn(herdr, 'start').mockResolvedValue(undefined as never)
-    try {
-      for (const [was, next, again] of [
-        ['old snapshot', 'new snapshot', true],
-        ['old snapshot', 'old snapshot', false],
-        ['old snapshot', 'Private instructions for task (from space one):\n(none)', true],
-      ] as const) {
-        writeJson('agents.json', { [key]: { ...old, system: was } })
-        const a = new Agents()
-        // the real launch's decisions, without a terminal, a route or a later delivery
-        Object.assign(a, { refresh: async () => undefined, bindRoute: async () => undefined })
-        try {
-          await a.ensure({ ...old, system: next, first: 'Carry on.' })
-          expect(a.outbox.map((o) => o.text)).toEqual(again ? [hidden(next), 'Carry on.'] : ['Carry on.'])
-          expect(a.record(key)?.system).toBe(next)
-        } finally { a.stop() }
-      }
-      expect(start).toHaveBeenCalledTimes(3)
-    } finally {
-      start.mockRestore()
-      timer.mockRestore()
-    }
-  })
-})

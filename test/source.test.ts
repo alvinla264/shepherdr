@@ -1222,7 +1222,8 @@ describe('news for coordinators', () => {
 
   test('the command keeps only a known coordinator chat as the task\'s requester', async () => {
     const originDir = mkdtempSync(join(tmpdir(), 'shep-news-ask-'))
-    execSync('git init -q -b main', { cwd: originDir, shell: '/bin/sh' })
+    // a repository with its base branch on it: adding a task checks it before the task is made
+    execSync('git init -q -b main && git config user.email t@t && git config user.name T && echo hi > README.md && git add -A && git commit -qm init', { cwd: originDir, shell: '/bin/sh' })
     const origin = await src.places.add(originDir, 'newsask')
     const requester = placeId.space(origin.name)
     const record = src.agents.records[requester]
@@ -2305,5 +2306,37 @@ describe('private instructions from the command', () => {
       src.settings.set('task.instructions', null, 'machine')
       src.settings.set('task.instructions', null)
     }
+  })
+})
+
+describe('choosing the branch tasks start from and merge into', () => {
+  test('the space’s base, from the command or its Settings, reaches new tasks only, and a task may pick its own', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'shep-src-base-'))
+    execSync('git init -q -b main && git config user.email t@t && git config user.name T && touch README.md && git add . && git commit -qm init && git branch develop && git branch feature/topic', { cwd: dir, shell: '/bin/sh' })
+    const p = await src.places.add(dir, 'base-cli')
+    const place = placeId.space(p.name)
+    expect((await src.cli(['set', 'space.base', 'develop', '--space', p.name], {})).code).toBe(0)
+    expect((await src.cli(['show', '--space', p.name], {})).out).toContain('Base branch: develop')
+    const add = await src.cli(['task', 'add', 'Its own target', '--base', 'feature/topic', '--space', p.name], {})
+    expect(add.code).toBe(0)
+    const t = src.engine.tasks.at(-1)!
+    expect(t.base).toBe('feature/topic')
+    expect((await src.cli(['task', 'show', t.id], {})).out).toContain('Merges into: feature/topic')
+    // a branch that isn't there starts nothing
+    const before = src.engine.tasks.length
+    expect((await src.cli(['task', 'add', 'Nowhere', '--base', 'missing', '--space', p.name], {})).code).toBe(1)
+    expect(src.engine.tasks.length).toBe(before)
+    // the earlier task keeps its own target when the space moves again
+    expect((await src.cli(['space', 'set', 'base', 'main', '--space', p.name], {})).code).toBe(0)
+    expect(t.base).toBe('feature/topic')
+    // the same choice in Settings, its page, and what it refuses
+    expect(await src.act({ type: 'setting', place, key: 'space.base', value: 'develop' })).toMatchObject({ ok: true })
+    expect(await src.act({ type: 'setting', place, key: 'space.base', value: 'missing' })).toMatchObject({ ok: false })
+    expect(p.base).toBe('develop')
+    expect(src.snapshot().settings.find((s) => s.level === place && s.name === 'Repository')?.rows[0]).toMatchObject({ key: 'space.base', value: 'develop' })
+    // a base is a repository's own: no Everywhere or machine level, and a home space has none
+    expect((await src.cli(['set', 'space.base', 'main'], {})).code).toBe(1)
+    expect((await src.cli(['set', 'space.base', 'main', '--space', 'home'], {})).code).toBe(1)
+    await until(() => !!t.trouble)
   })
 })

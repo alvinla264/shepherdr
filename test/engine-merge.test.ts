@@ -774,8 +774,10 @@ describe('on GitHub: a pull request per task', () => {
 
   test("logged in but GitHub doesn't answer: nothing merges, here or there", async () => {
     const w = world()
-    const g = onGitHub({ down: true })
+    const g = onGitHub()
     const { t } = await started(w, g.dir, 'ghdown')
+    // it started while GitHub was answering; it stops answering afterwards
+    g.set({ down: true })
     writeFileSync(join(t.worktree!, 'd.txt'), 'd\n')
     sh('git add -A && git commit -qm d', t.worktree!)
     const before = sh('git rev-parse main', g.dir)
@@ -855,8 +857,10 @@ describe('on GitHub: a pull request per task', () => {
 
   test("a GitHub remote gh isn't logged in to: merged here and main pushed, as before", async () => {
     const w = world()
-    const g = onGitHub({ authed: false })
+    const g = onGitHub()
     const { t } = await started(w, g.dir, 'ghnoauth')
+    // the login went away after it started
+    g.set({ authed: false })
     writeFileSync(join(t.worktree!, 'z.txt'), 'z\n')
     sh('git add -A && git commit -qm z', t.worktree!)
     expect((await w.engine.openPr(t.id)).text).toContain('No pull request')
@@ -878,5 +882,61 @@ describe('on GitHub: a pull request per task', () => {
     expect((await w.engine.merge(t.id, { self: true })).ok).toBe(true)
     expect(p.github).toBe('acme/app')
     expect(g.gh().prs[0].state).toBe('MERGED')
+  })
+})
+
+describe('a target other than main', () => {
+  test('a branch only origin has starts the task there and its pull request merges there, leaving main alone', async () => {
+    const w = world()
+    const g = onGitHub()
+    sh('git branch develop main && git push -q origin develop && git branch -D develop', g.dir)
+    const main = sh('git rev-parse main', g.dir)
+    const p = await w.places.add(g.dir, 'gitflow')
+    const t = w.engine.add({ project: p.name, title: 'On develop', by: 'test', base: 'develop' })
+    await until(() => w.started.some((s) => s.key === `${t.id}/Agent`))
+    // the brief says where it starts; the space's own default is unchanged
+    expect(w.started.find((s) => s.key === `${t.id}/Agent`)!.system).toContain('(from develop)')
+    expect(w.engine.view(t).base).toBe('develop')
+    expect(p.base).toBe('main')
+    writeFileSync(join(t.worktree!, 'develop.txt'), 'work')
+    sh('git add -A && git commit -qm work', t.worktree!)
+    expect((await w.engine.openPr(t.id)).ok).toBe(true)
+    expect(g.gh().prs[0].base).toBe('develop')
+    expect((await w.engine.merge(t.id, { self: true })).ok).toBe(true)
+    expect(sh('git show develop:develop.txt', g.bare)).toBe('work')
+    expect(sh('git rev-parse main', g.bare)).toBe(main)
+    expect(sh('git rev-parse develop', g.dir)).toBe(sh('git rev-parse develop', g.bare))
+  })
+
+  test('a pull request someone retargeted on GitHub refuses to merge into another branch', async () => {
+    const w = world()
+    const g = onGitHub()
+    const { t } = await started(w, g.dir, 'retargeted')
+    writeFileSync(join(t.worktree!, 'work.txt'), 'work')
+    sh('git add -A && git commit -qm work', t.worktree!)
+    expect((await w.engine.openPr(t.id)).ok).toBe(true)
+    g.set({ prs: g.gh().prs.map((pr) => ({ ...pr, base: 'develop' })) })
+    const r = await w.engine.merge(t.id, { self: true })
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('targets develop')
+    expect(g.gh().calls.some((c) => c.args[0] === 'pr' && c.args[1] === 'merge')).toBe(false)
+  })
+
+  test('a base this login may not write to, or one origin no longer has, refuses before an agent starts', async () => {
+    const w = world()
+    const g = onGitHub()
+    const p = await w.places.add(g.dir, 'read-only')
+    g.set({ permission: 'READ' })
+    const t = w.engine.add({ project: p.name, title: 'No write access', by: 'test' })
+    await until(() => !!t.trouble)
+    expect(t.trouble).toContain('permission')
+    expect(t.worktree).toBeUndefined()
+    expect(w.started.some((s) => s.key === `${t.id}/Agent`)).toBe(false)
+    g.set({ permission: 'WRITE' })
+    sh('git branch gone && git push -q origin gone && git push -q origin --delete gone', g.dir)
+    const missing = w.engine.add({ project: p.name, title: 'Gone', by: 'test', base: 'gone' })
+    await until(() => !!missing.trouble)
+    expect(missing.trouble).toContain('Cannot fetch branch gone')
+    expect(missing.worktree).toBeUndefined()
   })
 })
