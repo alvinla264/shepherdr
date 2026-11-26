@@ -58,6 +58,8 @@ describe('the shepherdr secret command', () => {
   const src = new LiveSource()
   afterAll(() => src.stop())
   const home = placeId.home()
+  // what the worker hands its own agent once it has found its process: this space, this machine, everywhere
+  const proof = src.agents.secretAccess.issue(home, 'test-process', [home, placeId.machine(), 'all'])
 
   test('an agent asks with a card, and is told it is kept already', async () => {
     const r = await src.cli(['secret', 'ask', 'API_KEY', '--why', 'To call the API'], { chat: home })
@@ -71,17 +73,17 @@ describe('the shepherdr secret command', () => {
     // a paste's line end goes; anything else is the secret's own
     expect(await src.act({ type: 'secret', level: placeId.machine(), name: 'API_KEY', value: 'k-123456\n' })).toEqual({ ok: true })
     await src.act({ type: 'secret', level: placeId.machine(), name: 'SPACED', value: ' pass word ' })
-    expect((await src.cli(['secret', 'run', 'SPACED'], { chat: home })).secrets).toEqual({ SPACED: ' pass word ' })
+    expect((await src.cli(['secret', 'run', 'SPACED'], { chat: home, proof })).secrets).toEqual({ SPACED: ' pass word ' })
     expect((await src.cli(['secret', 'ask', 'API_KEY'], { chat: home })).out).toContain('kept already')
     expect((await src.cli(['secret', 'ask', 'API_KEY', '--force'], { chat: home })).code).toBe(0)
   })
 
   test('run and env get the values; nothing else prints or shows one', async () => {
     await src.act({ type: 'secret', level: 'all', name: 'OTHER', value: 'o-987654' })
-    const r = await src.cli(['secret', 'run', 'API_KEY', 'OTHER'], { chat: home })
+    const r = await src.cli(['secret', 'run', 'API_KEY', 'OTHER'], { chat: home, proof })
     expect(r).toEqual({ out: '', code: 0, secrets: { API_KEY: 'k-123456', OTHER: 'o-987654' } })
-    expect((await src.cli(['secret', 'env', 'API_KEY,OTHER', '--file', '.env'], { chat: home })).secrets).toEqual({ API_KEY: 'k-123456', OTHER: 'o-987654' })
-    const missing = await src.cli(['secret', 'run', 'NOPE'], { chat: home })
+    expect((await src.cli(['secret', 'env', 'API_KEY,OTHER', '--file', '.env'], { chat: home, proof })).secrets).toEqual({ API_KEY: 'k-123456', OTHER: 'o-987654' })
+    const missing = await src.cli(['secret', 'run', 'NOPE'], { chat: home, proof })
     expect(missing.code).toBe(1)
     expect(missing.out).toContain('shepherdr secret ask NOPE')
 
@@ -95,21 +97,55 @@ describe('the shepherdr secret command', () => {
     expect(readFileSync(join(process.env.SHEPHERDR_HOME!, 'vault.json'), 'utf8')).toContain('k-123456')
   })
 
-  test('values go only to a program on this machine, never through the web address', async () => {
-    const { direct } = await import('../server/app.ts')
-    expect(direct(new Request('http://127.0.0.1/api/cli', { method: 'POST' }))).toBe(true)
-    for (const h of ['x-forwarded-for', 'tailscale-user-login', 'origin'])
-      expect(direct(new Request('http://127.0.0.1/api/cli', { method: 'POST', headers: { [h]: 'x' } }))).toBe(false)
-    const r = await src.cli(['secret', 'run', 'API_KEY'], { chat: home, local: false })
-    expect(r.code).toBe(1)
-    expect(r.secrets).toBeUndefined()
+  test('run and env need this session\u2019s credential: no proof, or one that is not current, gets nothing', async () => {
+    // loopback and headers are not a credential, and neither is a chat the caller names
+    for (const ctx of [{ chat: home }, { chat: home, local: false }, { chat: home, proof: '0'.repeat(64) }, { chat: home, proof: 'not-a-proof' }]) {
+      const r = await src.cli(['secret', 'run', 'API_KEY'], ctx)
+      expect(r.code).toBe(1)
+      expect(r.secrets).toBeUndefined()
+      expect(r.out).toContain('needs a current agent credential')
+    }
+    // a credential for a scope this worker no longer has grants nothing
+    const stale = src.agents.secretAccess.issue('GTM-98/Agent', 'test-process', ['p:somewhere:else', 'all'])
+    expect((await src.cli(['secret', 'run', 'API_KEY'], { chat: 'GTM-98/Agent', proof: stale })).out).toContain('scope is no longer valid')
+    // nor does one that was revoked
+    const revoked = src.agents.secretAccess.issue('GTM-99/Agent', 'test-process', [home, placeId.machine(), 'all'])
+    src.agents.secretAccess.revoke('GTM-99/Agent')
+    expect((await src.cli(['secret', 'run', 'API_KEY'], { chat: 'GTM-99/Agent', proof: revoked })).code).toBe(1)
+    // names and values are still managed from a terminal, which needs no credential
+    expect((await src.cli(['secret', 'list'], { chat: home })).out).toContain('API_KEY')
+  })
+
+  test('over the web address the credential is the Authorization bearer and nothing else', async () => {
+    const { startApp } = await import('../server/app.ts')
+    const server = startApp({ source: src, dist: '/nonexistent', port: 0 })
+    const run = async (headers: Record<string, string> = {}, body: object = {}) => {
+      const r = await fetch(`http://127.0.0.1:${server.port}/api/cli`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ args: ['secret', 'run', 'API_KEY'], chat: home, ...body }) })
+      return (await r.json()) as { code: number; secrets?: Record<string, string> }
+    }
+    try {
+      // straight from this machine and through a proxy that claims to be it: both need the bearer
+      const none: Record<string, string>[] = [{}, { 'x-forwarded-for': '127.0.0.1', forwarded: 'for=127.0.0.1', 'tailscale-user-login': 'me' }, { authorization: 'Bearer nope' }]
+      for (const headers of none) {
+        const r = await run(headers)
+        expect(r.code).toBe(1)
+        expect(r.secrets).toBeUndefined()
+      }
+      expect((await run({ authorization: `Bearer ${proof}` })).secrets).toEqual({ API_KEY: 'k-123456' })
+      // naming another chat in the body does not reach another space's secrets
+      await src.act({ type: 'secret', level: 'p:other:private', name: 'ONLY_THERE', value: 'other-value' })
+      expect((await run({ authorization: `Bearer ${proof}` }, { args: ['secret', 'env', 'ONLY_THERE'], chat: 'p:other:private', cwd: '/elsewhere' })).code).toBe(1)
+      expect((await run({ authorization: `Bearer ${proof}` }, { chat: 'p:other:private', cwd: '/elsewhere' })).secrets).toEqual({ API_KEY: 'k-123456' })
+    } finally {
+      server.stop(true)
+    }
   })
 
   test('the human sets and removes one from a terminal, its value on stdin', async () => {
     expect((await src.cli(['secret', 'set', 'TYPED'], {})).code).toBe(1)
     expect((await src.cli(['secret', 'set', 'TYPED', '--machine'], { stdin: 'v-1\n' })).out).toContain('Saved TYPED')
-    expect((await src.cli(['secret', 'run', 'TYPED'], { chat: home })).secrets).toEqual({ TYPED: 'v-1' })
+    expect((await src.cli(['secret', 'run', 'TYPED'], { chat: home, proof })).secrets).toEqual({ TYPED: 'v-1' })
     expect((await src.cli(['secret', 'rm', 'TYPED', '--machine'], {})).code).toBe(0)
-    expect((await src.cli(['secret', 'run', 'TYPED'], { chat: home })).code).toBe(1)
+    expect((await src.cli(['secret', 'run', 'TYPED'], { chat: home, proof })).code).toBe(1)
   })
 })

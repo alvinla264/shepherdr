@@ -1,6 +1,6 @@
 // Artifacts: one HTML file and its data, kept per place, a new version on every update, checked before anyone sees it.
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -115,6 +115,21 @@ describe('what an agent hands over', () => {
     expect(r.html).toContain('url(data:image/png;base64,')
     expect(r.html).toContain(fake)
     expect(r.missing).toEqual([fake, `${dir}/none.png`])
+  })
+  test('Shepherdr’s own private files cannot be published as an artifact, not even through a link', () => {
+    // the vault and the helper's credentials are private to this machine: an import would put them on a phone
+    mkdirSync(join(HOME, 'inbox'), { recursive: true })
+    writeFileSync(join(HOME, 'inbox', 'shot.html'), '<p>a shot</p>')
+    // (not vault.json itself: other files in this run keep their state in the same home)
+    writeFileSync(join(HOME, 'private-state.html'), '<p>shh</p>')
+    // an attachment may go in; the rest of its state may not
+    expect(Artifacts.read(join(HOME, 'inbox', 'shot.html'), undefined, dir).html).toBe('<p>a shot</p>')
+    expect(() => Artifacts.read(join(HOME, 'private-state.html'), undefined, dir)).toThrow('Private Shepherdr')
+    // a link is the file it leads to, and a path that walks back in is that same file
+    const link = join(dir, 'innocent.html')
+    symlinkSync(join(HOME, 'private-state.html'), link)
+    expect(() => Artifacts.read(link, undefined, dir)).toThrow('Private Shepherdr')
+    expect(() => Artifacts.read(join(HOME, 'inbox', '..', 'private-state.html'), undefined, dir)).toThrow('Private Shepherdr')
   })
   test('HTML over 2 MB, data that is not JSON, and a missing file are refused with the reason', () => {
     expect(() => Artifacts.read(file('big.html', 'x'.repeat(MAX_HTML + 1)), undefined, dir)).toThrow('over 2 MB')
