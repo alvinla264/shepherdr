@@ -4,10 +4,10 @@
 The next commit, `7ab916828f40de769f23164d6d0a9ae23327f7bc` ("SHE-261: Clear titles and UI wording (#456)"), fails
 Check on our fork and on upstream. Base fork work on `2fb1e639`.
 
-What that rests on: `2fb1e639` passes, and every newer commit either fails a Check dispatched here (`7ab91682`,
-`fdea10ae`, `82b75c64`) or has no passing Check anywhere (upstream: no success after `2fb1e639`; the rest of the
-upper half was not individually dispatched). Commits 15–20 and 22–42 were not probed one by one, so a passing Check
-among them would raise the boundary; that no such pass exists is not proven, only suggested by the evidence below.
+What that rests on: `2fb1e639` passes, and every commit from `7ab91682` through `e4fd736a` (14–22) fails a Check
+dispatched here — 14, 15, 16, 17, 18, 19, 20, 21, 22. Commits 23–42 were not dispatched one by one; upstream has no
+passing Check for any of them (failures at 23–27, 29, 38–42, cancellations elsewhere), but that is upstream's runners
+and is cited as a hint only.
 
 ## Method
 
@@ -19,8 +19,9 @@ among them would raise the boundary; that no such pass exists is not proven, onl
    neighbouring commits are left — the lower one passing, the upper one failing.
 3. Upstream's own pushes to main were read as a hint for the starting point only, never as the verdict. That hint put
    the first probes on the pair upstream showed as green-then-red (13, 14); the search then tested the upper half at
-   21 and, when that failed, at 16. With 14 failing, no commit at or above it can be the top of the green run, so
-   13/14 is the terminal pair. (Midpoint 11 of the remaining lower half was dispatched as a check on the narrowing;
+   21 and, when that failed, at 16. The gap between 14 and 22 was then closed commit by commit (15, 17, 18, 19, 20,
+   22), each dispatched on its own probe branch: all failed, so no commit newer than 13 passes in this range, and the
+   pair stays 13 (passing) / 14 (failing). (Midpoint 11 of the lower half was dispatched as a check on the narrowing;
    both of its attempts stalled in runner setup and it has no verdict. It changes nothing: 14 already fails.)
 
 Probes (indices are positions in the table below):
@@ -29,8 +30,14 @@ Probes (indices are positions in the table below):
 |---|--------|--------------|----------|------------|
 | 13 | `2fb1e639` | `probe/2fb1e63932df` | [45772452376](https://github.com/alvinla264/shepherdr/actions/runs/45772452376) | **success** (attempt 2) |
 | 14 | `7ab91682` | `probe/7ab916828f40` | [45772455974](https://github.com/alvinla264/shepherdr/actions/runs/45772455974) | **failure** |
+| 15 | `ccedb530` | `probe/ccedb530b549` | [45780644221](https://github.com/alvinla264/shepherdr/actions/runs/45780644221) | **failure** |
 | 16 | `fdea10ae` | `probe/fdea10aede9f` | [45775837267](https://github.com/alvinla264/shepherdr/actions/runs/45775837267) | **failure** |
+| 17 | `8c55b0e5` | `probe/8c55b0e54dbf` | [45780652074](https://github.com/alvinla264/shepherdr/actions/runs/45780652074) | **failure** |
+| 18 | `2e752380` | `probe/2e752380e97c` | [45780660082](https://github.com/alvinla264/shepherdr/actions/runs/45780660082) | **failure** |
+| 19 | `4da1053f` | `probe/4da1053f2c49` | [45782849764](https://github.com/alvinla264/shepherdr/actions/runs/45782849764) | **failure** |
+| 20 | `4f643ea5` | `probe/4f643ea5c558` | [45782859225](https://github.com/alvinla264/shepherdr/actions/runs/45782859225) | **failure** |
 | 21 | `82b75c64` | `probe/82b75c643851` | [45772573122](https://github.com/alvinla264/shepherdr/actions/runs/45772573122) | **failure** |
+| 22 | `e4fd736a` | `probe/e4fd736a0715` | [45782867858](https://github.com/alvinla264/shepherdr/actions/runs/45782867858) | **failure** |
 | 11 | `9611dd0a` | `probe/9611dd0a3cb8` | [45775829548](https://github.com/alvinla264/shepherdr/actions/runs/45775829548) | unknown (cancelled, twice) |
 
 - `2fb1e639`, attempt 1: `test (1/3)` was cancelled after 15 min with the job's `timeout-minutes` while still in
@@ -39,14 +46,14 @@ Probes (indices are positions in the table below):
   attempt 2 passed all four jobs.
 - `7ab91682`: `types and build` and `test (2/3)` passed, `test (1/3)` and `test (3/3)` failed — the same two shards
   that failed upstream in 40845087285.
-- `fdea10ae`: `test (3/3)` failed in `bun run test`; `test (1/3)` hit the same setup stall, which cannot turn the
-  run green.
-- `82b75c64`: all three test shards failed (it was `cancelled` upstream, so our run is the evidence that the
-  upper half is red here too).
-- `9611dd0a`: both attempts stalled in `bun x playwright-core install-deps webkit` and hit the 15-minute job
+- 15–22: all failed in `bun run test`; `types and build` passed in every run. 15 (`3/3`), 17 (`2/3`), 18 (`2/3`,
+  `3/3`), 20 (`2/3`, `3/3`) failed a shard while another shard hit the setup stall; 19 and 22 failed all three
+  shards. Where a shard stalled it is recorded as cancelled and cannot turn the run green.
+- `9611dd0a` (11): both attempts stalled in `bun x playwright-core install-deps webkit` and hit the 15-minute job
   timeout; two shards and `types and build` passed on each attempt. Recorded as unknown, not red.
 
-The runner stall above hit two of the five probes; it is a setup step in the runner image, not this line's tests.
+The runner stall above hit four of the eleven probes. Expect to rerun a shard now and then: the `install-deps webkit`
+step hangs in the runner image and the job's 15-minute timeout cancels it, which is the runner and not the commit.
 
 ## All 42 commits
 
@@ -100,11 +107,11 @@ Upstream `Check` runs with `event: push`, `headBranch: main`. "cancelled" means 
 
 ## What is and is not proven
 
-- Proven on our fork: `2fb1e639` passes; `7ab91682`, `fdea10ae` and `82b75c64` fail; `main` (`74da1e63`, v2.0.0)
+- Proven on our fork: `2fb1e639` (13) passes; every commit 14–22 fails a dispatched Check (`7ab91682`, `ccedb530`,
+  `fdea10ae`, `8c55b0e5`, `2e752380`, `4da1053f`, `4f643ea5`, `82b75c64`, `e4fd736a`); `main` (`74da1e63`, v2.0.0)
   passed in 45763565610.
-- Not proven: that no commit older than `2fb1e639` after the last known red one passes (1–12 were not dispatched
-  one by one), and that no commit above the terminal pair passes (15–20 and 22–42 were not dispatched one by one).
-  Upstream has no passing Check for any commit after `2fb1e639`, and the two upper-half probes that ran here failed,
-  so the boundary is where the evidence points — not a scan of all 42 on our runners.
+- Not dispatched: commits 1–12 and 23–42. Upstream has no passing Check for any of 23–42 — failures at 23–27, 29 and
+  38–42, cancellations at 28 and 30–37 — so no newer green commit is known anywhere; that is upstream's runners and is
+  not proof on ours.
 - `9611dd0a` (11) is unknown, not red: both attempts were cancelled by the runner setup stall.
 - The 42 upstream runs are upstream's runners, not ours; they are cited as hints only.
