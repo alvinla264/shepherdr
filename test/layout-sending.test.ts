@@ -415,3 +415,19 @@ describe.skipIf(!browser)('what the best chats do', () => {
       await page.close()
     }, 30_000)
 })
+
+describe.skipIf(!browser)('a message held for its question', () => {
+  test('says it waits for your answer and jumps to the question; it answers nothing (phone)', async () => {
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
+    await page.goto(`http://127.0.0.1:${server!.port}/?place=p:vm-str:gtm&task=GTM-14`)
+    const held = page.locator('[data-msg]').filter({ hasText: 'Also update the README.' })
+    await held.getByText('Waiting for your answer above.').waitFor()
+    // the link lights the question up, and answers nothing
+    await held.getByRole('button', { name: 'Go to question' }).click()
+    expect(await page.locator('[data-flash]').textContent()).toContain('Allow: rm -rf template/skills/old?')
+    expect(await page.getByRole('button', { name: 'Send now', exact: true }).count()).toBe(0)
+    expect(world.chat('GTM-14/Agent').messages.find((m) => m.question?.id === 'f4')?.question?.sent).toBeUndefined()
+    expect(await held.isVisible()).toBe(true)
+    await page.close()
+  }, 30_000)
+})

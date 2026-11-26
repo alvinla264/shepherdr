@@ -195,8 +195,8 @@ describe.skipIf(!browser)('the Tasks header', () => {
           await page.waitForSelector('section[aria-label="Tasks"] [role="group"][aria-label="Show"]')
           await page.getByText('Needs you', { exact: true }).first().waitFor()
           const t = await head(page)
-          // the tabs, the count on Tasks, nothing else: no "· place" to mistake for a third tab
-          expect(t.text).toMatch(/^Tasks\d*Artifacts$/)
+          // the tabs, the count on Tasks and the lock that holds the filters: no "· place" to mistake for a third tab
+          expect(t.text).toMatch(/^Tasks\d*ArtifactsLock$/)
           expect(t.text).not.toContain('·')
           expect(await page.getByText('everything under it').count()).toBe(0)
           // the shown tab is plainly picked: filled and edged; the other is bare
@@ -410,5 +410,33 @@ describe.skipIf(!browser)('a coordinator working in the background', () => {
       Object.assign(c, was[i])
       c.messages = c.messages.filter((m) => m.id !== 'bg-reply')
     })
+  }, 30_000)
+})
+
+describe.skipIf(!browser)('a task’s phone header', () => {
+  test('names the task, with its ID, agent and progress under it; a long name opens whole (phone)', async () => {
+    const task = world.tasks.find((t) => t.id === 'GTM-14')!
+    const was = task.name
+    const name = 'Bundle skills into the template with clear instructions for every machine and every new project'
+    task.name = name
+    const page = await browser!.newPage({ viewport: { width: 320, height: 740 }, hasTouch: true })
+    try {
+      await page.goto(`${url()}&task=GTM-14`)
+      const title = page.getByRole('button', { name: `Show full task title: ${name}` })
+      await title.waitFor()
+      const header = page.locator('[data-chrome]').filter({ has: title })
+      expect(await header.textContent()).toContain('GTM-14 · Claude Code')
+      expect(await header.textContent()).toContain('62%')
+      // two lines hold it back, and a tap opens it whole
+      expect(await title.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true)
+      await title.click()
+      const open = page.getByRole('button', { name: `Collapse task title: ${name}` })
+      expect(await open.getAttribute('aria-expanded')).toBe('true')
+      expect(await open.evaluate((e) => e.scrollHeight <= e.clientHeight + 1)).toBe(true)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    } finally {
+      task.name = was
+      await page.close()
+    }
   }, 30_000)
 })

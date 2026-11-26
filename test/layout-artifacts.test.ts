@@ -329,4 +329,26 @@ describe.skipIf(!browser)('artifacts', () => {
     expect(await frame.locator('body').evaluate(() => (window as unknown as { kept?: number }).kept)).toBe(1)
     await page.close()
   }, 30_000)
+
+  test('a phone keeps the version in words, with touch-sized tools (phone)', async () => {
+    const page = await browser!.newPage({ viewport: { width: 320, height: 740 }, hasTouch: true })
+    await page.goto(at('place=vm-str/home&artifact=a1'))
+    const dialog = page.getByRole('dialog', { name: 'This week across machines' })
+    const versions = dialog.getByRole('button', { name: 'Versions', exact: true })
+    await versions.waitFor()
+    expect(await versions.textContent()).toContain(`v${world.artifacts.find((a) => a.id === 'a1')!.v}`)
+    // the version is there to read, not only as an icon; Mark up keeps its word for the screen reader and a wide screen
+    expect(await versions.getByText(/^v\d+$/).isVisible()).toBe(true)
+    const mark = dialog.getByRole('button', { name: 'Mark up', exact: true })
+    expect((await mark.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    expect(await mark.getAttribute('aria-label')).toBe('Mark up')
+    // the version menu still opens, and marking up still turns on
+    await versions.click()
+    await dialog.getByRole('menu', { name: 'Versions' }).waitFor()
+    await page.keyboard.press('Escape')
+    await mark.click()
+    expect(await dialog.getByRole('button', { name: 'Done marking up' }).getAttribute('aria-pressed')).toBe('true')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.close()
+  }, 30_000)
 })
