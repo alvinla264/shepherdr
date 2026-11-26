@@ -511,4 +511,116 @@ describe.skipIf(!browser)('the UI pass (SHE-81)', () => {
     expect(await page.locator('iframe').first().evaluate((f: HTMLIFrameElement) => f.src)).toContain('&theme=')
     await ctx.close()
   }, 30_000)
+
+  test('an ordinary question answers with one tap, and a second tap while it goes sends nothing (phone)', async () => {
+    const chat = world.chats['p:vm-str:~']
+    chat.messages.push({ id: 'fast-colour', who: 'agent', at: Date.now(), question: { id: 'fast:colour', title: 'Which colour?', kind: 'Form', ordinary: true, choices: [{ label: 'Blue' }, { label: 'Green' }], to: 'home' } })
+    const sent: Action[] = []
+    const act = world.act
+    let arrived: (() => void) | undefined
+    world.act = async (a: Action) => {
+      if (a.type !== 'answer') return act(a)
+      sent.push(a)
+      await new Promise<void>((resolve) => (arrived = resolve))
+      return { ok: true }
+    }
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
+    try {
+      await page.goto(url())
+      const card = page.locator('[data-whole="fast-colour"] [data-card]')
+      await card.waitFor()
+      // nothing to pick and then confirm: each choice says it sends
+      expect(await card.getByRole('button', { name: 'Send', exact: true }).count()).toBe(0)
+      expect(await card.textContent()).toContain('Choose an answer to send it now.')
+      const blue = card.getByRole('button', { name: 'Send: Blue', exact: true })
+      expect(await blue.getAttribute('aria-pressed')).toBeNull()
+      await blue.tap()
+      await until(() => sent.length === 1)
+      expect(sent[0]).toMatchObject({ type: 'answer', chat: chat.key, question: 'fast:colour', choice: 0 })
+      // on its way: it stays disabled, and another choice sends nothing more
+      expect(await blue.isDisabled()).toBe(true)
+      expect(await card.getByRole('status').textContent()).toBe('Sending…')
+      await card.getByRole('button', { name: 'Send: Green', exact: true }).evaluate((b: HTMLButtonElement) => b.click())
+      expect(sent.length).toBe(1)
+    } finally {
+      arrived?.()
+      world.act = act
+      chat.messages = chat.messages.filter((m) => m.id !== 'fast-colour')
+      await page.close()
+    }
+  }, 30_000)
+
+  test('Add a note comes first on an ordinary question: the box takes the focus, and its Send takes the note', async () => {
+    const chat = world.chats['p:vm-str:~']
+    chat.messages.push({ id: 'fast-note', who: 'agent', at: Date.now(), question: { id: 'fast:note', title: 'Which colour?', kind: 'Form', ordinary: true, choices: [{ label: 'Blue' }, { label: 'Green' }], to: 'home' } })
+    const sent: Action[] = []
+    const act = world.act
+    world.act = async (a: Action) => (a.type === 'answer' ? (sent.push(a), { ok: true }) : act(a))
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
+    try {
+      await page.goto(url())
+      const card = page.locator('[data-whole="fast-note"] [data-card]')
+      await card.waitFor()
+      expect(await card.getByRole('textbox', { name: 'Note', exact: true }).count()).toBe(0)
+      await card.getByRole('button', { name: 'Add a note', exact: true }).tap()
+      const note = card.getByRole('textbox', { name: 'Note', exact: true })
+      expect(await note.evaluate((el) => el === document.activeElement)).toBe(true)
+      await note.fill('the darker one')
+      // with a note to write, a choice is only a pick; Send sends both
+      const green = card.getByRole('button', { name: 'Green', exact: true })
+      await green.tap()
+      expect(await green.getAttribute('aria-pressed')).toBe('true')
+      expect(sent.length).toBe(0)
+      await card.getByRole('button', { name: 'Send', exact: true }).click()
+      await until(() => sent.length === 1)
+      expect(sent[0]).toMatchObject({ type: 'answer', chat: chat.key, question: 'fast:note', choice: 1, note: 'the darker one' })
+    } finally {
+      world.act = act
+      chat.messages = chat.messages.filter((m) => m.id !== 'fast-note')
+      await page.close()
+    }
+  }, 30_000)
+
+  test('a permission, a plan, several picks, a note it must have and an unread prompt all keep pick-then-Send', async () => {
+    const chat = world.chats['p:vm-str:~']
+    const base = { title: 'Choose', kind: 'Form' as const, ordinary: true, choices: [{ label: 'First' }, { label: 'Second' }], to: 'home' }
+    // marked ordinary, and still no one-tap: an approval is not a question, and none of these can be settled by one tap
+    const cases = [
+      { ordinary: undefined, kind: 'Question' as const, title: 'Allow writing files?' },
+      { terminal: true, noNote: true },
+      { kind: 'Plan' as const, steps: ['Build it'] },
+      { multi: true },
+      { noteRequiredFor: 0 },
+      { id: 'menu:permission' },
+    ]
+    chat.messages.push(...cases.map((c, i) => ({ id: `keep-${i}`, who: 'agent' as const, at: Date.now() + i, question: { ...base, id: `keep:${i}`, ...c } })))
+    const sent: Action[] = []
+    const act = world.act
+    world.act = async (a: Action) => (a.type === 'answer' ? (sent.push(a), { ok: true }) : act(a))
+    const page = await browser!.newPage({ viewport: { width: 820, height: 1180 }, hasTouch: true })
+    try {
+      await page.goto(url())
+      for (let i = 0; i < cases.length; i++) {
+        const card = page.locator(`[data-whole="keep-${i}"] [data-card]`)
+        // no choice claims to send, and Send waits for a pick
+        expect(await card.getByRole('button', { name: /^Send: / }).count()).toBe(0)
+        const send = card.getByRole('button', { name: 'Send', exact: true })
+        expect(await send.isDisabled()).toBe(true)
+        const first = card.getByRole('button', { name: 'First', exact: true })
+        await first.tap()
+        expect(await first.getAttribute('aria-pressed')).toBe('true')
+        expect(sent.length).toBe(0)
+        expect(await send.isEnabled()).toBe(true)
+      }
+      // the one that needs a note takes the focus to it instead of sending without one
+      const required = page.locator('[data-whole="keep-4"] [data-card]')
+      await required.getByRole('button', { name: 'Send', exact: true }).click()
+      expect(sent.length).toBe(0)
+      expect(await required.getByRole('textbox', { name: 'Note' }).evaluate((el) => el === document.activeElement)).toBe(true)
+    } finally {
+      world.act = act
+      chat.messages = chat.messages.filter((m) => !m.id.startsWith('keep-'))
+      await page.close()
+    }
+  }, 30_000)
 })

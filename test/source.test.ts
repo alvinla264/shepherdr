@@ -453,6 +453,26 @@ describe("a task's CLI, model and effort", () => {
 })
 
 describe('choice cards', () => {
+  test('--ordinary is the only way a card answers in one tap: an unmarked ask carries no flag at all', async () => {
+    const chat = placeId.home()
+    const asked = async (args: string[]) => {
+      expect((await src.cli(['ask', ...args], { chat })).code).toBe(0)
+      const q = src.chats.log(chat).posted.at(-1)!.question!
+      await src.act({ type: 'answer', chat, question: q.id, choice: 0 }).catch(() => undefined)
+      return q
+    }
+    // an ordinary question: flagged, and nothing else about it changes
+    const fast = await asked(['Rerun CI on main?', '--ordinary', '--choice', 'Rerun it', '--choice', 'Leave it'])
+    expect(fast).toMatchObject({ ordinary: true, kind: 'Form', title: 'Rerun CI on main?' })
+    expect(fast.multi).toBeUndefined()
+    // unmarked: the flag is absent, so the card keeps pick-then-Send
+    expect((await asked(['Rerun CI on main?', '--choice', 'Rerun it', '--choice', 'Leave it'])).ordinary).toBeUndefined()
+    // and a help listing offers the switch, saying what it is for
+    const help = await src.cli(['help'], { chat })
+    expect(help.out).toContain('--ordinary')
+    expect(help.out).toContain('never permissions, startup approvals or plans')
+  })
+
   test('a typed reply closes the open card: the dot stops waiting and the card shows answered', async () => {
     const chat = placeId.home()
     const r = await src.cli(['ask', 'Rerun CI on main?', '--choice', 'Rerun it', '--choice', 'Leave it'], { chat })
