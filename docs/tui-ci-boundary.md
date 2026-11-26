@@ -1,19 +1,27 @@
 # TUI CI boundary
 
 **Boundary commit:** `2fb1e63932dff6992ae3288910809a8312e4b83e` — "SHE-258: Safe secrets for agents (#455)".
-It is the last commit in `v2.0.0..ebb17d58` whose Check workflow passes. The next commit,
-`7ab916828f40de769f23164d6d0a9ae23327f7bc` ("SHE-261: Clear titles and UI wording (#456)"), fails Check on our
-fork and on upstream. Base fork work on `2fb1e639`.
+The next commit, `7ab916828f40de769f23164d6d0a9ae23327f7bc` ("SHE-261: Clear titles and UI wording (#456)"), fails
+Check on our fork and on upstream. Base fork work on `2fb1e639`.
+
+What that rests on: `2fb1e639` passes, and every newer commit either fails a Check dispatched here (`7ab91682`,
+`fdea10ae`, `82b75c64`) or has no passing Check anywhere (upstream: no success after `2fb1e639`; the rest of the
+upper half was not individually dispatched). Commits 15–20 and 22–42 were not probed one by one, so a passing Check
+among them would raise the boundary; that no such pass exists is not proven, only suggested by the evidence below.
 
 ## Method
 
 1. In the fork (`alvinla264/shepherdr`), pushed `probe/<12-char-sha>` at the commit and dispatched
    `check.yml` on it (`gh workflow run check.yml --ref probe/<sha>`); pushes to `main` do not trigger CI here.
-   Both commits of the boundary pair already had `workflow_dispatch` in `check.yml`, so nothing was edited.
+   Every probed commit already had `workflow_dispatch` in `check.yml`, so nothing was edited.
 2. Binary search over the 42 commits in range order (`v2.0.0` exclusive, `9c0e22ff` first, `ebb17d58` last):
    a passing middle moves the search up towards `ebb17d58`, a failing one down towards `9c0e22ff`, until two
    neighbouring commits are left — the lower one passing, the upper one failing.
-3. Upstream's own pushes to main were read as a hint for which half to try first, never as the verdict.
+3. Upstream's own pushes to main were read as a hint for the starting point only, never as the verdict. That hint put
+   the first probes on the pair upstream showed as green-then-red (13, 14); the search then tested the upper half at
+   21 and, when that failed, at 16. With 14 failing, no commit at or above it can be the top of the green run, so
+   13/14 is the terminal pair. (Midpoint 11 of the remaining lower half was dispatched as a check on the narrowing;
+   both of its attempts stalled in runner setup and it has no verdict. It changes nothing: 14 already fails.)
 
 Probes (indices are positions in the table below):
 
@@ -21,7 +29,9 @@ Probes (indices are positions in the table below):
 |---|--------|--------------|----------|------------|
 | 13 | `2fb1e639` | `probe/2fb1e63932df` | [45772452376](https://github.com/alvinla264/shepherdr/actions/runs/45772452376) | **success** (attempt 2) |
 | 14 | `7ab91682` | `probe/7ab916828f40` | [45772455974](https://github.com/alvinla264/shepherdr/actions/runs/45772455974) | **failure** |
+| 16 | `fdea10ae` | `probe/fdea10aede9f` | [45775837267](https://github.com/alvinla264/shepherdr/actions/runs/45775837267) | **failure** |
 | 21 | `82b75c64` | `probe/82b75c643851` | [45772573122](https://github.com/alvinla264/shepherdr/actions/runs/45772573122) | **failure** |
+| 11 | `9611dd0a` | `probe/9611dd0a3cb8` | [45775829548](https://github.com/alvinla264/shepherdr/actions/runs/45775829548) | unknown (cancelled, twice) |
 
 - `2fb1e639`, attempt 1: `test (1/3)` was cancelled after 15 min with the job's `timeout-minutes` while still in
   `bun x playwright-core install-deps webkit`; `types and build`, `test (2/3)` and `test (3/3)` had passed.
@@ -29,11 +39,14 @@ Probes (indices are positions in the table below):
   attempt 2 passed all four jobs.
 - `7ab91682`: `types and build` and `test (2/3)` passed, `test (1/3)` and `test (3/3)` failed — the same two shards
   that failed upstream in 40845087285.
+- `fdea10ae`: `test (3/3)` failed in `bun run test`; `test (1/3)` hit the same setup stall, which cannot turn the
+  run green.
 - `82b75c64`: all three test shards failed (it was `cancelled` upstream, so our run is the evidence that the
   upper half is red here too).
+- `9611dd0a`: both attempts stalled in `bun x playwright-core install-deps webkit` and hit the 15-minute job
+  timeout; two shards and `types and build` passed on each attempt. Recorded as unknown, not red.
 
-Neighbours 13 (passing) and 14 (failing) end the search: the boundary is 13, and 21's failure confirms the search
-never had to go up.
+The runner stall above hit two of the five probes; it is a setup step in the runner image, not this line's tests.
 
 ## All 42 commits
 
@@ -87,9 +100,11 @@ Upstream `Check` runs with `event: push`, `headBranch: main`. "cancelled" means 
 
 ## What is and is not proven
 
-- Proven on our fork: `2fb1e639` passes, `7ab91682` fails, `82b75c64` fails; `main` (`74da1e63`, v2.0.0) passed
-  in 45763565610.
-- Not individually dispatched: commits 1–12, 15–20 and 22–42. Upstream has no passing Check for any commit after
-  `2fb1e639`, which agrees with the boundary, but the binary search reads the boundary as the top of one green run
-  ending at `2fb1e639`; a passing commit among 15–20 or 22–42 would contradict it.
+- Proven on our fork: `2fb1e639` passes; `7ab91682`, `fdea10ae` and `82b75c64` fail; `main` (`74da1e63`, v2.0.0)
+  passed in 45763565610.
+- Not proven: that no commit older than `2fb1e639` after the last known red one passes (1–12 were not dispatched
+  one by one), and that no commit above the terminal pair passes (15–20 and 22–42 were not dispatched one by one).
+  Upstream has no passing Check for any commit after `2fb1e639`, and the two upper-half probes that ran here failed,
+  so the boundary is where the evidence points — not a scan of all 42 on our runners.
+- `9611dd0a` (11) is unknown, not red: both attempts were cancelled by the runner setup stall.
 - The 42 upstream runs are upstream's runners, not ours; they are cited as hints only.
