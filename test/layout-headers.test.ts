@@ -187,7 +187,7 @@ describe.skipIf(!browser)('the Tasks header', () => {
         return { pressed: b.getAttribute('aria-pressed'), bg: st.backgroundColor, shadow: st.boxShadow }
       }
       const [tasks, artifacts] = [...tabs.querySelectorAll('button')]
-      const count = tasks.querySelector('[aria-label$="requests need you in the panel scope"]')
+      const count = tasks.querySelector('[data-attention-badge]')
       return {
         text: bar.textContent,
         tabs: rect(tabs),
@@ -214,7 +214,7 @@ describe.skipIf(!browser)('the Tasks header', () => {
           await page.getByText('Needs you', { exact: true }).first().waitFor()
           const t = await head(page)
           // the tabs, the Needs you count (with Ready beside it) and the filter lock: no "· place" as a third tab
-          expect(t.text).toMatch(/^Tasks\d*(\d+ ready)?ArtifactsLock$/)
+          expect(t.text).toMatch(/^Tasks[\d+]*ArtifactsLock$/)
           expect(t.text).not.toContain('·')
           expect(await page.getByText('everything under it').count()).toBe(0)
           // the shown tab is plainly picked: filled and edged; the other is bare
@@ -235,7 +235,7 @@ describe.skipIf(!browser)('the Tasks header', () => {
           // and it stays right there with Artifacts shown
           await page.getByRole('button', { name: 'Artifacts', exact: true }).click()
           const still = await page.evaluate(() => {
-            const c = document.querySelector('[aria-label="Show"] button [aria-label$="requests need you in the panel scope"]')
+            const c = document.querySelector('[aria-label="Show"] button [data-attention-badge]')
             return c ? (c.getBoundingClientRect().toJSON() as Box) : null
           })
           expect(still).toEqual(t.count)

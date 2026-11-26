@@ -35,7 +35,7 @@ const weight = (page: Page, list: string, name: string) => page.locator(`${go(li
 const plainHeading = async (page: Page, list: string, id: string) => {
   const h = page.locator(`${list} li[data-heading="${id}"]`)
   expect(await h.locator('h2 span').evaluate((n) => getComputedStyle(n).fontWeight)).not.toBe('600')
-  expect(await h.locator('[aria-label$="need you here"], [data-autopilot]').count()).toBe(0)
+  expect(await h.locator('[data-attention-badge], [data-autopilot]').count()).toBe(0)
 }
 
 describe.skipIf(!browser)('unread and notify', () => {
