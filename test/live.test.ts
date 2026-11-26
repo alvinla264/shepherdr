@@ -752,6 +752,8 @@ describe('the brief\'s default way of working', () => {
   test("a task's agent is told who it is, its task's facts and which skills to read; the rules are in the skills", () => {
     const p = taskPrompt({ id: 'X-1', branch: 'work/1-x', base: 'main' }, 'How long this space\'s tasks really took: 20m.')
     expect(p).toContain('the agent of task X-1')
+    expect(p).toContain('SHEPHERDR_CHAT="X-1/Agent"')
+    expect(p).toContain('Never start a server to repair command routing')
     expect(p).toContain('skill/shepherdr/SKILL.md first')
     expect(p).toContain('skill/shepherdr-agent/SKILL.md')
     expect(p).not.toContain('shepherdr-coordinator')
@@ -835,6 +837,8 @@ describe("a coordinator's instructions", () => {
       expect(p).not.toContain('home space')
       expect(p).toContain('skill/shepherdr/SKILL.md first')
       expect(p).toContain('skill/shepherdr-coordinator/SKILL.md')
+      // its launch prompt names the command and chat it owns
+      expect(p).toContain('Your authoritative command is SHEPHERDR_CHAT="gtm"')
       expect(p).not.toContain('shepherdr-agent')
       expect(p).toContain(`Autopilot is ${mode === 'autopilot' ? 'on' : 'off'} now.`)
     }

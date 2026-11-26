@@ -137,3 +137,113 @@ describe('shepherdr secret run and env', () => {
     })
   })
 })
+
+describe.if(perl)('a session owns its command route', () => {
+  const command = join(root, 'bin', 'shepherdr')
+  const router = join(root, 'helper', 'route.pl')
+  /** A real process binds itself, then runs commands; its folder and env can be as stale as a shared tool's. */
+  async function routed(route: Record<string, string>, commands: string[][], env: Record<string, string> = {}) {
+    const home = mkdtempSync(join(tmpdir(), 'shep-route-'))
+    const helper = join(home, '.shepherdr', 'helper')
+    mkdirSync(join(helper, 'bin'), { recursive: true })
+    copyFileSync(router, join(helper, 'route.pl'))
+    copyFileSync(join(root, 'helper', 'shepherdr'), join(helper, 'bin', 'shepherdr'))
+    const sock = Bun.serve({ unix: join(helper, 'main.sock'), fetch: async (req) => Response.json({ out: `${JSON.stringify(await req.json())}\n`, code: 0 }) })
+    const spec = route.helper === 'own' ? { ...route, helper: join(helper, 'bin', 'shepherdr') } : route
+    const code = `
+      const router = ${JSON.stringify(router)}, spec = ${JSON.stringify(spec)}
+      const bind = () => {
+        const p = Bun.spawnSync(['perl', router, '--bind', String(process.pid), JSON.stringify(spec)])
+        if (p.exitCode) throw new Error(p.stderr.toString())
+      }
+      bind()
+      for (const args of ${JSON.stringify(commands)}) {
+        if (args[0] === 'bind') { spec.chat = args[1]; bind(); continue }
+        const p = Bun.spawnSync(args, { env: { ...process.env } })
+        process.stdout.write(p.stdout); process.stderr.write(p.stderr)
+        if (p.exitCode) process.exit(p.exitCode)
+      }
+    `
+    try {
+      return await run([process.execPath, '-e', code], { HOME: home, SHEPHERDR_HOME: join(home, '.shepherdr'), SHEPHERDR_CHAT: 'ST-1/Reviewer', SHEPHERDR_URL: 'http://127.0.0.1:7787', HERDR_PANE_ID: 'some-other-pane', ...env })
+    } finally {
+      sock.stop(true)
+    }
+  }
+
+  test("an installed helper and the repo command ignore a stale chat, URL and login shell", async () => {
+    const r = await routed({ helper: 'own', chat: 'SHE-9/Agent' }, [
+      [command, 'show'],
+      ['/bin/bash', '-lc', `PATH=${JSON.stringify(join(root, 'bin'))}:$PATH shepherdr show`],
+      ['bind', 'space-key'],
+      [command, 'show'],
+      ['bind', 'SHE-10/Reviewer'],
+      [command, 'show'],
+    ])
+    expect(r.code).toBe(0)
+    expect(r.err).toBe('')
+    expect(r.out.trim().split('\n').map((l) => JSON.parse(l).chat)).toEqual(['SHE-9/Agent', 'SHE-9/Agent', 'space-key', 'SHE-10/Reviewer'])
+  })
+
+  test('a stale URL reaches the owning live server; --url and a changed URL keep their explicit target', async () => {
+    const live = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async (req) => Response.json({ out: `live ${(await req.json() as { chat: string }).chat}\n`, code: 0 }) })
+    const demo = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => Response.json({ out: 'demo target\n', code: 0 }) })
+    const demoUrl = `http://127.0.0.1:${demo.port}`
+    try {
+      const r = await routed({ url: `http://127.0.0.1:${live.port}`, chat: 'SHE-9/Agent' }, [
+        [command, 'show'],
+        [command, '--url', demoUrl, 'show'],
+        ['env', `SHEPHERDR_URL=${demoUrl}`, command, 'show'],
+        ['env', 'SHEPHERDR_CHAT=SHE-9/Reviewer', command, 'show'],
+      ])
+      expect(r.code).toBe(0)
+      expect(r.out).toBe('live SHE-9/Agent\ndemo target\ndemo target\nlive SHE-9/Reviewer\n')
+    } finally {
+      live.stop(true)
+      demo.stop(true)
+    }
+  })
+
+  test('a matching owner found by folder reaches that session from a shared executor, despite its stale env', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'shep-shared-'))
+    const folder = join(home, 'task-worktree')
+    mkdirSync(folder)
+    const live = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async (req) => Response.json({ out: `${(await req.json() as { chat: string }).chat}\n`, code: 0 }) })
+    const code = `
+      const owner = Bun.spawn(['/bin/sleep', '20'], { env: { ...process.env, SHEPHERDR_CHAT: 'SHE-9/Agent', SHEPHERDR_URL: '' }, stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
+      try {
+        const b = Bun.spawnSync(['perl', ${JSON.stringify(router)}, '--bind', String(owner.pid), JSON.stringify({ cwd: ${JSON.stringify(folder)}, chat: 'SHE-9/Agent', url: ${JSON.stringify(`http://127.0.0.1:${live.port}`)} })])
+        if (b.exitCode) throw new Error(b.stderr.toString())
+        const p = Bun.spawnSync([${JSON.stringify(command)}, 'show'], { cwd: ${JSON.stringify(folder)} })
+        process.stdout.write(p.stdout); process.stderr.write(p.stderr); process.exit(p.exitCode)
+      } finally { owner.kill(); await owner.exited }
+    `
+    try {
+      // The tool's parent is the long-lived shared CLI (codex app-server), whose env points at an old URL.
+      const r = await run(['/bin/bash', '-c', 'exec -a codex "$@"', 'shared-cli', process.execPath, '-e', code, 'app-server'], { HOME: home, SHEPHERDR_CHAT: 'ST-1/Reviewer', SHEPHERDR_URL: 'http://127.0.0.1:7787', HERDR_PANE_ID: 'stale-pane' })
+      expect(r.code).toBe(0)
+      expect(r.out).toBe('SHE-9/Agent\n')
+    } finally {
+      live.stop(true)
+    }
+  })
+
+  test('a route left at a reused pid does not claim the new process', async () => {
+    const local = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => Response.json({ out: 'local target\n', code: 0 }) })
+    const home = mkdtempSync(join(tmpdir(), 'shep-reused-'))
+    const dir = join(home, '.shepherdr', 'helper', 'routes')
+    mkdirSync(dir, { recursive: true })
+    const code = `
+      await Bun.write(${JSON.stringify(dir)} + '/' + process.pid + '.json', JSON.stringify({ stamp: 'another start', chat: 'wrong', helper: '/missing' }))
+      const p = Bun.spawnSync([${JSON.stringify(command)}, 'show'])
+      process.stdout.write(p.stdout); process.stderr.write(p.stderr); process.exit(p.exitCode)
+    `
+    try {
+      const r = await run([process.execPath, '-e', code], { HOME: home, SHEPHERDR_URL: `http://127.0.0.1:${local.port}` })
+      expect(r.code).toBe(0)
+      expect(r.out).toBe('local target\n')
+    } finally {
+      local.stop(true)
+    }
+  })
+})

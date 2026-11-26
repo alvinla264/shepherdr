@@ -12,6 +12,7 @@ const { LiveSource } = await import('../server/live/source.ts')
 const { HOST, NAME, placeId, Places } = await import('../server/live/places.ts')
 const { herdr } = await import('../server/live/herdr.ts')
 const { hidden } = await import('../server/live/agents.ts')
+const { isAgentProcess } = await import('../server/live/agent-process.ts')
 const { heartbeatFile } = await import('../server/live/heartbeat.ts')
 const { carryOn } = await import('../server/live/retry.ts')
 const { Worktrees } = await import('../server/live/engine/worktrees.ts')
@@ -447,7 +448,8 @@ describe("a task's CLI, model and effort", () => {
     expect(src.agents.args(rec('claude', 'default', 'default'), false)).toEqual(hooks)
     // a level its model lacks goes in as the nearest it has
     expect(src.agents.args(rec('claude', 'Haiku 5.5', 'ultra'), false)).toEqual([...hooks, '--model', 'claude-haiku-5-5', '--effort', 'max'])
-    expect(src.agents.args(rec('codex', 'gpt-6-luna', 'ultra'), false)).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort="max"'])
+    // Codex also pins its own tools' environment, so the CLI and everything it starts carry this chat's owner
+    expect(src.agents.args(rec('codex', 'gpt-6-luna', 'ultra'), false).slice(2)).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-m', 'gpt-6-luna', '-c', 'model_reasoning_effort="max"'])
     expect(src.agents.args(rec('pi', 'openai/gpt-5.5', 'lowest'), false)).toEqual(['--model', 'openai/gpt-5.5', '--thinking', 'minimal'])
     expect(src.agents.args(rec('gemini', 'x', 'high'), false)).toEqual([])
   })
@@ -2063,6 +2065,28 @@ describe('the launch a chat shows', () => {
     } finally {
       setModels('codex', undefined)
       delete records[place]
+    }
+  })
+})
+
+describe('agent process identity', () => {
+  test('a native CLI and npm\'s node/bun entry points are found, but another script argument is not', () => {
+    expect(isAgentProcess('codex', ['/opt/bin/codex', '--resume'])).toBe(true)
+    expect(isAgentProcess('pi', ['/usr/bin/node', '/opt/node_modules/@mariozechner/pi-coding-agent/dist/cli.js'])).toBe(true)
+    expect(isAgentProcess('claude', ['/usr/bin/bun', '/opt/node_modules/@anthropic-ai/claude-code/cli.js'])).toBe(true)
+    expect(isAgentProcess('pi', ['/usr/bin/node', '/some/app.js', 'pi'])).toBe(false)
+    expect(isAgentProcess('codex', ['/usr/bin/python', '/opt/@openai/codex/bin.js'])).toBe(false)
+  })
+
+  test('Codex starts and resumes with the owning chat and command in its tool environment', () => {
+    const rec = (key: string) => ({ key, name: 'n', kind: 'codex', cwd: '/', workspace: 'w', logs: [], started: 0, env: { SHEPHERDR_CHAT: 'ST-1/Reviewer', SHEPHERDR_URL: 'http://127.0.0.1:7787' }, access: 'full' as const })
+    for (const key of ['space-key', 'SHE-9/Agent', 'SHE-9/Reviewer']) {
+      for (const resume of [false, true]) {
+        const policy = src.agents.args(rec(key), resume).find((a) => a.startsWith('shell_environment_policy.set='))!
+        expect(policy).toContain(`"SHEPHERDR_CHAT"="${key}"`)
+        expect(policy).toContain('"SHEPHERDR_COMMAND"=')
+        expect(policy).toContain('"PATH"=')
+      }
     }
   })
 })
