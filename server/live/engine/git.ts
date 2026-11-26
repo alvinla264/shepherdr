@@ -9,6 +9,10 @@ export interface Run {
   code: number
   out: string
   err: string
+  /** a squash merge staged nothing: the base already holds what the branch holds */
+  empty?: boolean
+  /** the paths git left unmerged, in a failed rebase or merge */
+  paths?: string[]
 }
 
 /** a command on the task's machine: here, or over SSH on another one (box.ts) */
@@ -231,24 +235,52 @@ export async function commitAll(wt: string, message: string) {
   return r.ok
 }
 
-export async function mergeBase(wt: string, base: string) {
-  const ref = (await git(wt, 'rev-parse', '--verify', '--quiet', `origin/${base}`)).ok ? `origin/${base}` : base
-  const r = await git(wt, 'merge-base', ref, 'HEAD')
-  return r.ok ? r.out : ref
+export async function mergeBase(wt: string, base: string, ref = 'HEAD') {
+  const name = (await git(wt, 'rev-parse', '--verify', '--quiet', `origin/${base}`)).ok ? `origin/${base}` : base
+  const r = await git(wt, 'merge-base', name, ref)
+  return r.ok ? r.out : name
 }
 
-/** commits were made on `branch` since it was made: its tip is no longer the commit its reflog starts at */
-export async function workedOn(wt: string, branch: string) {
-  const r = await git(wt, 'reflog', 'show', '--format=%H', `refs/heads/${branch}`)
+/** `a` is an ancestor of `b`: `b` already holds everything `a` does */
+export const isAncestor = async (repo: string, a: string, b: string) => (await git(repo, 'merge-base', '--is-ancestor', a, b)).ok
+
+/** commits were made on `branch` since it was made: its tip is no longer the commit its reflog starts at. Read from the
+ *  branch's own ref, so a worktree that is gone or left on another commit says nothing about the branch itself. */
+export async function workedOn(repo: string, branch: string) {
+  const ref = `refs/heads/${branch}`
+  const r = await git(repo, 'reflog', 'show', '--format=%H', ref)
   const first = r.out.split('\n').filter(Boolean).at(-1)
-  const head = await git(wt, 'rev-parse', 'HEAD')
-  return r.ok && !!first && head.ok && head.out !== first
+  const tip = await git(repo, 'rev-parse', '--verify', '--quiet', ref)
+  return r.ok && !!first && tip.ok && tip.out !== first
 }
 
-export async function aheadCount(wt: string, base: string) {
-  const mb = await mergeBase(wt, base)
-  const r = await git(wt, 'rev-list', '--count', `${mb}..HEAD`)
+export async function aheadCount(wt: string, base: string, ref = 'HEAD') {
+  const mb = await mergeBase(wt, base, ref)
+  const r = await git(wt, 'rev-list', '--count', `${mb}..${ref}`)
   return Number(r.out || 0)
+}
+
+/** the paths git left unmerged, for a message that names them */
+export async function conflicted(repo: string) {
+  const r = await git(repo, 'diff', '--name-only', '--diff-filter=U')
+  return r.ok ? r.out.split('\n').filter(Boolean) : []
+}
+
+/** git called this a conflict: its own words at the start of a line (a filename saying "conflict" is not one) */
+export const isConflict = (r: Run) =>
+  !!r.paths?.length || /(?:^|\n)(?:CONFLICT \(|Automatic merge failed|error: could not apply [0-9a-f])/.test(`${r.out}\n${r.err}`)
+
+/** lines git prints about where it is, not about what failed */
+const statusWords = [/^On branch /, /^HEAD detached /, /^nothing to commit/, /^Changes not staged/, /^Changes to be committed/, /^Untracked files/, /^no changes added to commit/, /^You are currently rebasing/, /^interactive rebase in progress/, /^All conflicts fixed/, /^Last command done/, /^If you wish to skip/, /^  \(use "git /, /^Working tree clean/]
+
+/** git's own first failing line (err before out), never a status line like "On branch main" */
+export function firstFailure(r: Run) {
+  const lines = [r.err, r.out]
+    .join('\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !statusWords.some((w) => w.test(l)))
+  return lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines[0] ?? 'git did not say why'
 }
 
 /** bring the local base up to the remote's when there is one; refused when the two have split */
@@ -266,12 +298,45 @@ export async function catchUp(repo: string, base: string): Promise<Run> {
   return r.ok ? r : { ...r, err: `could not bring ${base} up to ${remote}: ${(r.err || r.out).split('\n')[0]}` }
 }
 
-/** replay the branch on top of the base; a conflict leaves it as it was */
-export async function rebase(wt: string, base: string) {
+/** replay the branch on top of the base; a conflict leaves it as it was, with git's paths named */
+export async function rebase(wt: string, base: string): Promise<Run> {
   const r = await git(wt, 'rebase', base)
-  if (!r.ok) await git(wt, 'rebase', '--abort')
-  return r
+  if (r.ok) return r
+  const paths = await conflicted(wt)
+  await git(wt, 'rebase', '--abort')
+  return { ...r, paths }
 }
+
+/** a scratch worktree lives in the repository's common .git, which is a folder even when `repo` is a linked worktree */
+async function scratchDir(repo: string, label: string) {
+  const common = await git(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+  return join(common.ok && common.out ? common.out : join(repo, '.git'), `${label}-${Date.now()}`)
+}
+
+/** replay `branch` on the base, whether or not a worktree of it is still here, without disturbing the checkout you work
+ *  in: in its own worktree when that has it checked out, else in a scratch one */
+export async function rebaseBranch(repo: string, branch: string, base: string): Promise<Run> {
+  // the scratch worktree is host-owned too: no repository hook runs while replaying an untrusted branch
+  guardBrokerRepo(repo)
+  if ((await git(repo, 'branch', '--show-current')).out === branch) return rebase(repo, base)
+  const tmp = await scratchDir(repo, 'shepherdr-rebase')
+  let add = await git(repo, 'worktree', 'add', '--quiet', tmp, branch)
+  // its folder is gone but git still lists it: a stale entry never makes a branch unmergeable
+  if (!add.ok && /already used by worktree|is already checked out/i.test(`${add.err}${add.out}`)) {
+    await git(repo, 'worktree', 'prune')
+    add = await git(repo, 'worktree', 'add', '--quiet', tmp, branch)
+  }
+  if (!add.ok) return add
+  if (brokerRepos.has(repo)) guardBrokerRepo(tmp)
+  try {
+    return await rebase(tmp, base)
+  } finally {
+    await removeWorktree(repo, tmp, true)
+  }
+}
+
+/** the index holds a change against HEAD: a squash merge staged something to commit */
+export const staged = async (repo: string) => !(await git(repo, 'diff', '--cached', '--quiet', '--exit-code')).ok
 
 /** merge a commit (or branch) into the base on this machine, without disturbing the checkout you work in */
 export async function mergeHere(repo: string, branch: string, base: string, message: string, squash: boolean): Promise<Run> {
@@ -283,22 +348,28 @@ export async function mergeHere(repo: string, branch: string, base: string, mess
     if ((await git(repo, 'status', '--porcelain', '--untracked-files=no')).out.trim()) return { ok: false, code: 1, out: '', err: `${base} has uncommitted changes in ${repo}` }
     const m = squash ? await git(repo, 'merge', '--squash', branch) : await git(repo, 'merge', '--no-ff', '-m', message, branch)
     if (!m.ok) {
+      const paths = await conflicted(repo)
       await git(repo, 'merge', '--abort')
       await git(repo, 'reset', '--hard', 'HEAD')
-      return { ...m, err: `conflict: ${m.out || m.err}` }
+      // git's own words: a failed merge is a conflict only when git called it one
+      return { ...m, paths }
     }
-    return squash ? git(repo, 'commit', '-q', '-m', message) : m
+    if (!squash) return m
+    if (!(await staged(repo))) return { ...m, empty: true }
+    return git(repo, 'commit', '-q', '-m', message)
   }
   // base is not checked out here: merge in a scratch worktree, then move the branch
-  const tmp = join(repo, '.git', `shepherdr-merge-${Date.now()}`)
+  const tmp = await scratchDir(repo, 'shepherdr-merge')
   const add = await git(repo, 'worktree', 'add', '--detach', tmp, base)
   if (!add.ok) return add
   // the merge's own worktree is host-owned too: a repository that needs the broker keeps its hooks and filters off there
   if (brokerRepos.has(repo)) guardBrokerRepo(tmp)
   try {
     const m = squash ? await git(tmp, 'merge', '--squash', branch) : await git(tmp, 'merge', '--no-ff', '-m', message, branch)
-    if (!m.ok) return { ...m, err: `conflict: ${m.out || m.err}` }
+    if (!m.ok) return { ...m, paths: await conflicted(tmp) }
     if (squash) {
+      // the base already holds the branch: nothing to commit, and nothing to move
+      if (!(await staged(tmp))) return { ...m, empty: true }
       const c = await git(tmp, 'commit', '-q', '-m', message)
       if (!c.ok) return c
     }

@@ -35,6 +35,27 @@ describe('a broker merge in a derived worktree', () => {
   })
 })
 
+describe('rebasing a branch the space checkout has not got', () => {
+  test('runs no repository hook', async () => {
+    const dir = repo()
+    const marker = join(mkdtempSync(join(tmpdir(), 'shep-rebase-mark-')), 'ran')
+    mkdirSync(join(dir, '.git', 'hooks'), { recursive: true })
+    writeFileSync(join(dir, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\necho ran > ${marker}\n`, { mode: 0o755 })
+    sh('git checkout -q -b work', dir)
+    writeFileSync(join(dir, 'a.txt'), 'a\n')
+    sh('git add -A && git commit -qm a', dir)
+    sh('git checkout -q main', dir)
+    writeFileSync(join(dir, 'b.txt'), 'b\n')
+    sh('git add -A && git commit -qm b', dir)
+    // the checkouts above ran it; the scratch worktree that replays the branch must not run it again
+    rmSync(marker, { force: true })
+    const r = await G.rebaseBranch(dir, 'work', 'main')
+    expect(r.ok).toBe(true)
+    expect(existsSync(marker)).toBe(false)
+    expect(sh('git log --format=%s -n 2 work', dir).split('\n')).toEqual(['a', 'b'])
+  })
+})
+
 describe('shepherdr merge', () => {
   test('rebases on main, squash-merges into main, marks it merged and cleans up once the turn ends', async () => {
     const w = world()
@@ -89,7 +110,7 @@ describe('shepherdr merge', () => {
     expect(existsSync(t.worktree!)).toBe(false)
   })
 
-  test('a conflict with main stops it with what to do, and main stays as it was', async () => {
+  test('a conflict with main names the path and leaves the task rebased, and main stays as it was', async () => {
     const w = world()
     const dir = repo()
     const { t } = await started(w, dir, 'conflicts')
@@ -97,14 +118,100 @@ describe('shepherdr merge', () => {
     sh('git commit -qam theirs', t.worktree!)
     writeFileSync(join(dir, 'README.md'), 'mine\n')
     sh('git commit -qam mine', dir)
+    await w.engine.done(t.id, 'Said theirs.')
     const before = sh('git rev-parse HEAD', dir)
     const r = await w.engine.merge(t.id, { self: true })
     expect(r.ok).toBe(false)
-    expect(r.error).toContain('Conflict with main')
+    expect(r.error).toContain('Conflict with main in README.md')
     expect(r.error).toContain(`shepherdr merge ${t.id} again`)
+    expect(t.landing?.step).toBe('rebase')
     expect(sh('git rev-parse HEAD', dir)).toBe(before)
     expect(sh('git status --porcelain', t.worktree!)).toBe('')
     expect(t.merged).toBeFalsy()
+  })
+
+  test('a fast-forward: main is an ancestor of the branch, so it lands without a rebase to go wrong', async () => {
+    const w = world()
+    const dir = repo()
+    const { t } = await started(w, dir, 'fastforward')
+    writeFileSync(join(t.worktree!, 'a.txt'), 'a\n')
+    sh('git add -A && git commit -qm a', t.worktree!)
+    // its folder cleaned up before it merged: the branch is a plain fast-forward, so the space checkout lands it
+    rmSync(t.worktree!, { recursive: true, force: true })
+    const r = await w.engine.merge(t.id, { self: true })
+    expect(r).toEqual({ ok: true, note: undefined })
+    expect(sh('git log --format=%s -n 1', dir)).toBe(`${t.id}: Say hello`)
+    expect(existsSync(join(dir, 'a.txt'))).toBe(true)
+    expect(t.merged).toBe(true)
+  })
+
+  test('its work cherry-picked to main with another sha, then main changed: it was in main already', async () => {
+    const w = world()
+    const dir = repo()
+    const { t } = await started(w, dir, 'cherry')
+    writeFileSync(join(t.worktree!, 'README.md'), 'hello\n')
+    sh('git commit -qam hello', t.worktree!)
+    // main moved on, then took its very change as a cherry-pick (a sha of its own), then changed the line again
+    writeFileSync(join(dir, 'b.txt'), 'b\n')
+    sh('git add -A && git commit -qm b', dir)
+    sh(`git cherry-pick -x ${t.branch} >/dev/null`, dir)
+    writeFileSync(join(dir, 'README.md'), 'hello again\n')
+    sh('git commit -qam again', dir)
+    const r = await w.engine.merge(t.id, { self: true })
+    // never "Merge failed: On branch main": the squash had nothing to stage because it was already there
+    expect(r).toEqual({ ok: true, note: 'it was in main already' })
+    expect(sh('git log --format=%s -n 1', dir)).toBe('again')
+    expect(w.engine.statusOf(t)).toBe('done')
+  })
+
+  test('a worktree put away after its work landed: merged from the space checkout, no spawn error', async () => {
+    const w = world()
+    const dir = repo()
+    const { t } = await started(w, dir, 'worktreegone')
+    writeFileSync(join(t.worktree!, 'landed.txt'), 'landed\n')
+    sh('git add -A && git commit -qm landed', t.worktree!)
+    // the coordinator fast-forwarded main to its branch, then its folder was removed
+    sh(`git merge -q --ff-only ${t.branch}`, dir)
+    sh(`git worktree remove --force ${t.worktree}`, dir)
+    expect(existsSync(t.worktree!)).toBe(false)
+    const r = await w.engine.merge(t.id, { self: true })
+    expect(r).toEqual({ ok: true, note: 'it was in main already' })
+    expect(w.engine.statusOf(t)).toBe('done')
+    expect(sh('git log --format=%s -n 1', dir)).toBe('landed')
+  })
+
+  test('a worktree gone while its branch is behind main: still rebased and landed from the space checkout', async () => {
+    const w = world()
+    const dir = repo()
+    const { t } = await started(w, dir, 'gonebehind')
+    writeFileSync(join(t.worktree!, 'a.txt'), 'a\n')
+    sh('git add -A && git commit -qm a', t.worktree!)
+    writeFileSync(join(dir, 'b.txt'), 'b\n')
+    sh('git add -A && git commit -qm b', dir)
+    // the folder is gone, and git may still list it (a removed folder, not a removed worktree)
+    rmSync(t.worktree!, { recursive: true, force: true })
+    const r = await w.engine.merge(t.id, { self: true })
+    expect(r).toEqual({ ok: true, note: undefined })
+    expect(sh('git log --format=%s -n 2', dir).split('\n')).toEqual([`${t.id}: Say hello`, 'b'])
+    expect(existsSync(join(dir, 'a.txt'))).toBe(true)
+  })
+
+  test('a failure quotes git own line, and is never called a conflict git did not call one', async () => {
+    const w = world()
+    const dir = repo()
+    const { t } = await started(w, dir, 'gotsown')
+    writeFileSync(join(t.worktree!, 'Automatic merge failed.txt'), 'from the branch\n')
+    sh('git add -A && git commit -qm x', t.worktree!)
+    // an untracked file main would have to overwrite: git refuses, but it is not a conflict. Its name holds git's own
+    // conflict words, which must still not be read as one
+    writeFileSync(join(dir, 'Automatic merge failed.txt'), 'not committed\n')
+    const r = await w.engine.merge(t.id, { self: true })
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/Merge failed: error: .*would be overwritten/i)
+    expect(r.error).not.toContain('On branch main')
+    expect(r.error).not.toContain('Conflict with main')
+    expect(t.merged).toBeFalsy()
+    expect(t.landing?.step).not.toBe('rebase')
   })
 
   test('a late message it has not read yet stops the merge until it has', async () => {
@@ -203,12 +310,66 @@ describe('shepherdr merge', () => {
       expect(w.engine.statusOf(t)).toBe('done')
     })
 
+  test('a multi-commit branch squash-merged with other work in main: still only marked merged', async () => {
+    const w = world()
+    const dir = repo()
+    const { t } = await started(w, dir, 'multisquash')
+    writeFileSync(join(t.worktree!, 'README.md'), 'one\n')
+    sh('git commit -qam one', t.worktree!)
+    writeFileSync(join(t.worktree!, 'README.md'), 'two\n')
+    sh('git commit -qam two', t.worktree!)
+    // main took other work first, then the branch as one squash, then changed the line again: no single commit
+    // of the branch matches anything main holds, and its old base conflicts with the new line
+    writeFileSync(join(dir, 'b.txt'), 'b\n')
+    sh('git add -A && git commit -qm b', dir)
+    sh(`git merge -q --squash ${t.branch} && git commit -qm "${t.id}: Say hello"`, dir)
+    writeFileSync(join(dir, 'README.md'), 'three\n')
+    sh('git commit -qam three', dir)
+    await w.engine.done(t.id, 'One, then two.')
+    const r = await w.engine.merge(t.id, { self: true })
+    expect(r).toEqual({ ok: true, note: 'it was in main already' })
+    expect(sh('git log --format=%s -n 1', dir)).toBe('three')
+  })
+
+  test('a filename saying "conflict" does not make git refusal a conflict', async () => {
+    const w = world()
+    const dir = repo()
+    const { t } = await started(w, dir, 'conflictname')
+    writeFileSync(join(t.worktree!, 'conflict.txt'), 'from the branch\n')
+    sh('git add -A && git commit -qm x', t.worktree!)
+    writeFileSync(join(dir, 'conflict.txt'), 'not committed\n')
+    const r = await w.engine.merge(t.id, { self: true })
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/Merge failed: error: .*would be overwritten/i)
+    expect(r.error).not.toContain('Conflict with main')
+    expect(t.landing?.step).not.toBe('rebase')
+  })
+
+  test('a space checkout that is itself a linked worktree: its branch still merges with the worktree gone', async () => {
+    // the repository's own checkout is on another branch; the space is a linked worktree of main, whose .git is a file
+    const origin = repo()
+    sh('git checkout -q -b scratch', origin)
+    const space = join(mkdtempSync(join(tmpdir(), 'shep-linked-')), 'space')
+    sh(`git worktree add -q ${space} main`, origin)
+    const w = world()
+    const { t } = await started(w, space, 'linkedspace')
+    writeFileSync(join(t.worktree!, 'a.txt'), 'a\n')
+    sh('git add -A && git commit -qm a', t.worktree!)
+    writeFileSync(join(space, 'b.txt'), 'b\n')
+    sh('git add -A && git commit -qm b', space)
+    rmSync(t.worktree!, { recursive: true, force: true })
+    const r = await w.engine.merge(t.id, { self: true })
+    expect(r).toEqual({ ok: true, note: undefined })
+    expect(sh('git log --format=%s -n 2', space).split('\n')).toEqual([`${t.id}: Say hello`, 'b'])
+    expect(existsSync(join(space, 'a.txt'))).toBe(true)
+  })
+
   test('nothing to merge is refused', async () => {
     const w = world()
     const { t } = await started(w, repo(), 'empty')
     const r = await w.engine.merge(t.id, { self: true })
     expect(r.ok).toBe(false)
-    expect(r.error).toContain('no changes')
+    expect(r.error).toBe(`${t.id} has no changes to merge`)
   })
 })
 

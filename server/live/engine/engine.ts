@@ -1781,34 +1781,59 @@ export class Engine extends Emitter<Events> {
       return { ok: false, error: self ? 'You have a new message in your chat: read and handle it, then merge again.' : `${t.id}'s agent has a new message it hasn't read yet: let it handle that first.` }
     this.land(t, 'merge')
     const p = this.proj(t)
-    const wt = t.worktree
+    // a folder that was cleaned up must not make its branch unmergeable: git runs on the space's own checkout instead,
+    // against the branch itself, and only the branch's own ref decides what is ahead or landed
+    const gone = !existsSync(t.worktree)
+    const wt = gone ? p.path : t.worktree
     // main here first catches up with the remote's, so the branch is rebased on what main really is
     const up = await G.catchUp(p.path, t.base)
     if (!up.ok) return { ok: false, error: `Can't merge ${t.id}: ${up.err}` }
-    await G.commitAll(wt, `${t.id}: ${t.title}`)
+    if (!gone) await G.commitAll(wt, `${t.id}: ${t.title}`)
+    else if (!(await G.branchExists(p.path, t.branch))) return { ok: false, error: `${t.id} has no branch ${t.branch} any more: nothing was merged` }
     const g = await this.hub(p)
     if (g) return this.mergeOnGitHub(t, p, g, self)
     // its pull request is open, but gh can't use GitHub here now: it is never merged around it
     if (t.pr) return { ok: false, error: `Can't merge ${t.id}: its PR #${t.pr.number} is on GitHub, but gh isn't signed in to it here (gh auth login), so nothing was merged.` }
     // nothing ahead of main and no work ever made here; work merged by a merge commit (a pull request) is behind it too
-    if ((await G.aheadCount(wt, t.base)) === 0 && !(await G.workedOn(wt, t.branch))) return { ok: false, error: `${t.id} has no changes to merge` }
+    if ((await G.aheadCount(wt, t.base, t.branch)) === 0 && !(await G.workedOn(p.path, t.branch))) return { ok: false, error: `${t.id} has no changes to merge` }
     let note: string | undefined
+    // its own earlier squash merges into main, by subject: a multi-commit squash has no commit main can match one by one
+    const squashes = [...(t.squash ? [t.squash] : []), ...(await G.squashesOf(p.path, t.base, t.id))]
     // merged already, by hand or as its pull request on GitHub (squashed, or with a merge commit), even with main
     // moved on since: it only needs marking
-    if (await G.landed(wt, 'HEAD', t.base)) note = `it was in ${t.base} already`
+    if (await G.landed(wt, t.branch, t.base, squashes)) note = `it was in ${t.base} already`
     else {
-      const rb = await G.rebase(wt, t.base)
-      if (!rb.ok) {
-        this.land(t, 'rebase')
-        return { ok: false, error: `Conflict with ${t.base}: rebase ${t.branch} on ${t.base} by hand, commit, then run shepherdr merge ${t.id} again.` }
+      // a fast-forward: main is an ancestor of the branch, so there is nothing to replay, only to land
+      if (!(await G.isAncestor(wt, t.base, t.branch))) {
+        const rb = await G.rebaseBranch(wt, t.branch, t.base)
+        if (!rb.ok) {
+          // only what git itself called a conflict: a lock file or a refused rebase is not one
+          if (G.isConflict(rb)) {
+            this.land(t, 'rebase')
+            const paths = rb.paths?.length ? ` in ${rb.paths.join(', ')}` : ''
+            return { ok: false, error: `Conflict with ${t.base}${paths}: rebase ${t.branch} on ${t.base} by hand, commit, then run shepherdr merge ${t.id} again.` }
+          }
+          return { ok: false, error: `Can't merge ${t.id}: rebase ${t.branch} on ${t.base} failed: ${G.firstFailure(rb)}` }
+        }
+        // the rebase dropped commits main already holds (a cherry-pick or squash with another sha): it is landed, not empty
+        if (await G.landed(wt, t.branch, t.base, squashes)) note = `it was in ${t.base} already`
       }
+    }
+    if (!note) {
       const message = `${t.id}: ${t.title}${t.said ? `\n\n${t.said}` : ''}${t.facts ? `\n\nFacts: ${t.facts}` : ''}`
       const m = await G.mergeHere(p.path, t.branch, t.base, message, true)
       if (!m.ok) {
-        if (/conflict/i.test(`${m.out}${m.err}`)) this.land(t, 'rebase')
-        return { ok: false, error: /conflict/i.test(`${m.out}${m.err}`) ? `Conflict with ${t.base}` : `Merge failed: ${(m.err || m.out).split('\n')[0]}` }
+        // git's own failing line, and a conflict only when git called it one
+        if (G.isConflict(m)) {
+          this.land(t, 'rebase')
+          const paths = m.paths?.length ? ` in ${m.paths.join(', ')}` : ''
+          return { ok: false, error: `Conflict with ${t.base}${paths}: rebase ${t.branch} on ${t.base} by hand, commit, then run shepherdr merge ${t.id} again.` }
+        }
+        return { ok: false, error: `Merge failed: ${G.firstFailure(m)}` }
       }
-      t.squash = (await G.git(p.path, 'rev-parse', '--verify', '--quiet', `refs/heads/${t.base}`)).out || undefined
+      // the squash staged nothing: main already holds the branch's content
+      if (m.empty) note = `it was in ${t.base} already`
+      else t.squash = (await G.git(p.path, 'rev-parse', '--verify', '--quiet', `refs/heads/${t.base}`)).out || undefined
     }
     // a GitHub remote gh can't use (not logged in): main is pushed as it is here
     if (p.github) {
