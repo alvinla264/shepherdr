@@ -1105,8 +1105,10 @@ describe('modes: regular and Autopilot', () => {
     places.save()
     expect(JSON.parse(readFileSync(join(process.env.SHEPHERDR_HOME!, 'modes.json'), 'utf8'))).toEqual({ 'p:h:auto': 'autopilot', 'p:h:reg': 'regular' })
   })
-  test('shepherdr mode takes regular and autopilot, any case', async () => {
-    expect((await src.cli(['mode', 'home', 'Autopilot'], {})).out.trim()).toBe('home: Autopilot on.')
+  test('shepherdr mode takes regular and autopilot, any case; a home space has no repository to isolate', async () => {
+    // a home space holds no repository: Autopilot refuses before any coordinator starts
+    expect((await src.cli(['mode', 'home', 'Autopilot'], {})).out).toContain('repository space')
+    expect(src.places.mode(placeId.home(HOST))).toBe('regular')
     expect((await src.cli(['mode', 'home', 'regular'], {})).out.trim()).toBe('home: Autopilot off.')
     for (const m of ['copilot', 'manual', 'sleepy']) expect((await src.cli(['mode', 'home', m], {})).code).toBe(1)
   })
@@ -1127,6 +1129,9 @@ describe('news for coordinators', () => {
       expect(news('added')).toEqual([])
       src.places.modes[project] = 'regular'
       src.places.modes[home] = 'autopilot'
+      // Autopilot with an owner: its news wakes it; without a run it would only be held
+      const homeRun = src.pilots.begin(home, src.settings.pilot())
+      homeRun.state = 'on'
       expect(news('ready')).toEqual([home, project].sort())
       expect(news('added')).toEqual([home])
       // the home space's own news goes to it once
@@ -1370,38 +1375,17 @@ describe("every machine's news reaches the main machine's home space", () => {
   })
 })
 
-describe('Autopilot switched on or off', () => {
-  test("posts one card in the place's chat and tells its coordinator quietly; no change, no card", async () => {
+describe('Autopilot switch failures are truthful', () => {
+  test('a home space cannot isolate, so Autopilot stays off with a reason and posts no card', async () => {
     const place = placeId.home(HOST)
     src.places.setMode(place, 'regular')
-    // only this test's (shepherdr mode switched the home space before)
     const since = Date.now()
     const cards = () => src.chats.chat(place).messages.filter((m) => m.card?.mode && (m.at ?? 0) >= since)
-    const sent: string[] = []
-    const send = src.agents.send
-    const status = src.agents.status
-    src.agents.send = (async (_k: string, text: string) => (sent.push(text), { waiting: false })) as typeof send
-    src.agents.status = (() => 'idle') as typeof status
-    try {
-      expect(await src.act({ type: 'mode', place, mode: 'regular' })).toEqual({})
-      expect(cards()).toEqual([])
-      expect(sent).toEqual([])
-      expect((await src.cli(['mode', 'home', 'autopilot'], {})).code).toBe(0)
-      expect(await src.act({ type: 'mode', place, mode: 'autopilot' })).toEqual({})
-      expect((await src.cli(['mode', 'home', 'regular'], {})).code).toBe(0)
-      expect(await src.act({ type: 'mode', place, mode: 'copilot' as never })).toEqual({ ok: false, error: 'No such mode.' })
-    } finally {
-      src.agents.send = send
-      src.agents.status = status
-    }
-    expect(cards().map((m) => [m.card!.mode, m.text])).toEqual([
-      ['autopilot', 'Autopilot on · works on its own'],
-      ['autopilot', 'Autopilot off · does what you ask'],
-    ])
-    expect(sent).toHaveLength(2)
-    expect(sent[0]).toContain('<shepherdr><mode mode="autopilot">Autopilot is now on: you also work on your own')
-    expect(sent[1]).toContain('<shepherdr><mode mode="regular">Autopilot is now off: do what the human asks, nothing on your own, and no more heartbeats.')
-    expect(sent[0]).toContain("don't announce it, reply with only <no-reply>reason</no-reply>")
+    const result = (await src.act({ type: 'mode', place, mode: 'autopilot' })) as { error?: string }
+    expect(result.error).toContain('repository space')
+    expect(src.places.mode(place)).toBe('regular')
+    expect(cards()).toEqual([])
+    expect(await src.act({ type: 'mode', place, mode: 'copilot' as never })).toEqual({ ok: false, error: 'No such mode.' })
   })
 })
 
@@ -1423,6 +1407,14 @@ describe("Autopilot's heartbeat", () => {
     const beats = () => sent.filter((x) => x.k === place && x.text.includes('<heartbeat>'))
     // on a half hour: every 30 minutes runs on the clock's :00 and :30
     const t0 = Math.floor(Date.now() / (30 * min)) * 30 * min
+    const run = src.pilots.begin(place, src.settings.pilot(p.name))
+    run.state = 'on'
+    // the heartbeat only wakes a run that is on; leaving Autopilot off around an edit keeps this fixture away from a real start
+    const offFor = async (fn: () => Promise<void>) => {
+      src.places.setMode(place, 'regular')
+      run.state = 'stopped'
+      try { await fn() } finally { src.places.setMode(place, 'autopilot'); run.state = 'on' }
+    }
     try {
       src.places.setMode(place, 'autopilot')
       src.heartbeats.switched(place, true, t0)
@@ -1460,7 +1452,9 @@ describe("Autopilot's heartbeat", () => {
       // read and changed with the command, from any machine: the checklist itself, never its path
       expect((await src.cli(['heartbeat'], { chat: place })).out).toContain('HEARTBEAT.md:\n# Heartbeat')
       expect((await src.cli(['heartbeat', 'set'], { chat: place })).out).toContain('on stdin')
-      expect((await src.cli(['heartbeat', 'set', p.name], { stdin: '- Check the ROM builds\n' })).out).toContain('is saved')
+      await offFor(async () => {
+        expect((await src.cli(['heartbeat', 'set', p.name], { stdin: '- Check the ROM builds\n' })).out).toContain('is saved')
+      })
       const shown = (await src.cli(['heartbeat', p.name], {})).out
       expect(shown).toContain('HEARTBEAT.md:\n- Check the ROM builds')
       expect(shown).not.toContain(heartbeatFile(place))
@@ -1473,12 +1467,15 @@ describe("Autopilot's heartbeat", () => {
       src.heartbeat(t0 + 62 * min)
       expect(beats()).toHaveLength(2)
       // an empty HEARTBEAT.md, edited in Settings: no heartbeat
-      expect(await src.act({ type: 'setting', key: 'heartbeat.md', value: '', place })).toEqual({ ok: true })
+      await offFor(async () => {
+        expect(await src.act({ type: 'setting', key: 'heartbeat.md', value: '', place })).toEqual({ ok: true })
+      })
       expect(src.snapshot().settings.find((x) => x.level === place && x.name === 'Autopilot')!.rows.find((r) => r.key === 'heartbeat.md')).toMatchObject({ value: '', doc: true })
       src.heartbeat(t0 + 93 * min)
       expect(beats()).toHaveLength(2)
       // off Autopilot: no heartbeat however long it waits
       src.places.setMode(place, 'regular')
+      run.state = 'stopped'
       src.heartbeats.switched(place, false)
       await src.act({ type: 'setting', key: 'heartbeat.md', value: '- check things', place })
       src.heartbeat(t0 + 300 * min)
@@ -1887,15 +1884,25 @@ describe("a task row's menu, and pin from the command", () => {
 })
 
 describe('Autopilot from the command', () => {
-  test('three settings and no limits: the heartbeat, the news that wakes it and its checklist; no budget anywhere', async () => {
+  test('one Heartbeat, schedule and events, an agent and a shared access/limit profile; old budgets stay absent', async () => {
     const { place } = await workedTask('piloting')
     src.places.setMode(place, 'autopilot')
     try {
       // the coordinator, on its own: Shepherdr adds what it asks; the machine's max tasks at once bounds the rest
-      expect((await src.cli(['task', 'add', 'Fix the typo', '--desc', 'Fix it.'], { chat: place })).out).toContain('Added')
+      const added = (await src.cli(['task', 'add', 'Fix the typo', '--desc', 'Fix it.'], { chat: place })).out
+      expect(added).toContain('Added')
+      // and it can read what its task's agent said, as its Autopilot procedure tells it to
+      const id = added.match(/Added (\S+):/)![1]
+      expect((await src.cli(['task', 'chat', id], {})).code).toBe(0)
       expect((await src.cli(['task', 'add', 'Fix the link', '--desc', 'Fix it.'], { chat: place })).out).toContain('Added')
-      // a checklist is a space's own (the home space's too), not a default Everywhere or the machine passes down
-      for (const s of src.snapshot().settings.filter((x) => x.name === 'Autopilot')) expect(s.rows.map((r) => r.label)).toEqual(['Heartbeat', 'Wakes at once on', ...(s.level?.startsWith('p:') ? ['Checklist'] : [])])
+      // the Heartbeat is a space's own (the home space's too); the profile and its limits are rows above it
+      for (const s of src.snapshot().settings.filter((x) => x.name === 'Autopilot')) {
+        const keys = s.rows.map((r) => r.key)
+        for (const key of ['heartbeat.when', 'heartbeat.on', 'autopilot.agent', 'autopilot.model', 'autopilot.effort', 'autopilot.access', 'autopilot.hosts', 'autopilot.secrets', 'autopilot.approvals', 'autopilot.traffic', 'autopilot.tokens', 'autopilot.runtime', 'autopilot.parallel']) expect(keys).toContain(key)
+        expect(s.rows[0].label).toBe(s.level?.startsWith('p:') ? 'Heartbeat' : 'When')
+        expect(s.rows.filter((r) => r.doc)).toHaveLength(s.level?.startsWith('p:') ? 1 : 0)
+        expect(s.rows.some((r) => r.label === 'Checklist')).toBe(false)
+      }
       const show = (await src.cli(['show'], {})).out
       expect(show).toContain('heartbeat.when')
       expect(show).toContain('heartbeat.on')

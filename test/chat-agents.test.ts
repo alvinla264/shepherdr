@@ -57,6 +57,39 @@ describe('which CLIs can hold a chat', () => {
     }
   })
 
+  test('a relaunch lets its own start callback replace the agent', async () => {
+    const agents = new Agents()
+    let launched = 0
+    // the launch itself belongs to herdr; here only the handover through ensure is under test
+    ;(agents as unknown as { launch: (s: unknown) => Promise<null> }).launch = async () => (launched++, null)
+    try {
+      const spec = { key: 'relaunch-chat', name: 'relaunch-chat', kind: 'codex', cwd: '/tmp', workspace: 'test' }
+      await agents.relaunch(spec.key, false, () => agents.ensure(spec))
+      expect(launched).toBe(1)
+    } finally {
+      agents.stop()
+    }
+  })
+
+  test('a launch whose owner stopped during preparation never starts', async () => {
+    const agents = new Agents()
+    const spec = { key: 'late-worker', name: 'late-worker', kind: 'codex', cwd: '/tmp', workspace: 'test' }
+    let prepared = false
+    agents.prepare = async (s) => {
+      prepared = true
+      return { ...s, env: {}, isolation: { run: 'run-1', home: '/tmp/late', control: '/tmp/control', path: '/tmp/late/wrapper' } }
+    }
+    agents.launchAllowed = () => {
+      if (prepared) throw new Error('This Autopilot run has stopped.')
+    }
+    try {
+      await expect(agents.ensure(spec)).rejects.toThrow('has stopped')
+      expect(agents.record(spec.key)).toBeUndefined()
+    } finally {
+      agents.stop()
+    }
+  })
+
   test('the restart sheet lists readable kinds only, while a chat already on one without a reader still says what it runs', () => {
     const info = restartInfo({ role: 'task', on: { kind: 'gemini' }, want: { kind: 'codex' }, kinds: ['gemini', 'cursor', 'claude', 'codex', 'pi'], working: false })
     expect(info.on.kind).toBe('gemini')

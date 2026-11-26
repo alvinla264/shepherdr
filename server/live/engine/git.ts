@@ -12,7 +12,18 @@ export interface Run {
 }
 
 /** a command on the task's machine: here, or over SSH on another one (box.ts) */
+const brokerRepos = new Set<string>()
+/** A repository touched by isolated workers must not execute workspace-controlled hooks, filters or helpers on the host. */
+export function guardBrokerRepo(cwd: string) { brokerRepos.add(cwd) }
+
 export async function sh(cmd: string[], cwd: string, opts: { timeoutMs?: number; env?: Record<string, string>; here?: boolean } = {}): Promise<Run> {
+  if (cmd[0] === 'git' && brokerRepos.has(cwd)) {
+    const keys = await run(['git', '-C', cwd, 'config', '--name-only', '--get-regexp', '^filter\\.'], { timeoutMs: 5000 })
+    const filters = [...new Set(keys.out.split('\n').filter(Boolean).map((k) => k.replace(/\.(clean|smudge|process|required)$/, '')))]
+    const safe = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.sshCommand=ssh', '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential']
+    for (const filter of filters) for (const key of ['clean', 'smudge', 'process', 'required']) safe.push('-c', `${filter}.${key}=${key === 'required' ? 'false' : ''}`)
+    cmd = ['git', ...safe, ...cmd.slice(1)]
+  }
   if (BOX && !opts.here) {
     const r = await run(cmd, { cwd, env: { GIT_TERMINAL_PROMPT: '0', ...opts.env }, timeoutMs: opts.timeoutMs })
     return { ok: r.code === 0, code: r.code, out: r.out.trimEnd(), err: r.err.trimEnd() }
@@ -264,6 +275,9 @@ export async function rebase(wt: string, base: string) {
 
 /** merge a commit (or branch) into the base on this machine, without disturbing the checkout you work in */
 export async function mergeHere(repo: string, branch: string, base: string, message: string, squash: boolean): Promise<Run> {
+  // every merge Shepherdr brokers is untrusted work becoming a host commit: never run its hooks or filters, whether or
+  // not an Autopilot sandbox was prepared for it in this process (a restart keeps the task, not the guard)
+  guardBrokerRepo(repo)
   const current = (await git(repo, 'branch', '--show-current')).out
   if (current === base) {
     if ((await git(repo, 'status', '--porcelain', '--untracked-files=no')).out.trim()) return { ok: false, code: 1, out: '', err: `${base} has uncommitted changes in ${repo}` }
@@ -279,6 +293,8 @@ export async function mergeHere(repo: string, branch: string, base: string, mess
   const tmp = join(repo, '.git', `shepherdr-merge-${Date.now()}`)
   const add = await git(repo, 'worktree', 'add', '--detach', tmp, base)
   if (!add.ok) return add
+  // the merge's own worktree is host-owned too: a repository that needs the broker keeps its hooks and filters off there
+  if (brokerRepos.has(repo)) guardBrokerRepo(tmp)
   try {
     const m = squash ? await git(tmp, 'merge', '--squash', branch) : await git(tmp, 'merge', '--no-ff', '-m', message, branch)
     if (!m.ok) return { ...m, err: `conflict: ${m.out || m.err}` }

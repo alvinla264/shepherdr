@@ -5,29 +5,67 @@ import { LinkBackoff } from './recovery.ts'
 // Codex and pi take it mid-turn, as steering). It waits only while the CLI shows a menu or permission prompt, where typed
 // text could pick an option, or is still starting; then it goes in as soon as it can.
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, watch, type FSWatcher } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { mkdirSync, readFileSync, statSync, watch, type FSWatcher } from 'node:fs'
+import { dirname, join, relative } from 'node:path'
 import { Emitter } from '../source.ts'
 import { readJson, writeJson } from '../store.ts'
 import type { AgentRuntime, TermScreen } from '../../shared/types.ts'
 import { herdr, Subscription, type AgentInfo, type AgentStatus, type HerdrError, type HerdrEvent } from './herdr.ts'
 import { ClaudeSessions, Reviewers, screenBackground, sessionBackground, type Background } from './readers/background.ts'
-import { claudeHome, claudeLogPath, findClaudeLog, findCodexLog, findLog, findPiLog, logKind } from './readers/find.ts'
+import { claudeHome, claudeLogPath, findClaudeLog, findCodexLog, findLog, findPiLog, logKind, mainCodexLog } from './readers/find.ts'
 import { effortFor, modelArg } from './models.ts'
 import { tag } from './chatlines.ts'
 import { hookSettings, HookLogs, type Said } from './readers/hooks.ts'
 import * as task from './mfs.ts'
 import { boxDir, mirrored } from './mfs.ts'
-import { agentEnv, BOX, helperDir, run, runSync } from './box.ts'
+import { agentEnv, BOX, helperDir, q, run, runSync } from './box.ts'
 import { ROOT } from '../root.ts'
 import { leftAtPrompt } from './commands.ts'
 import { paneWrong, type Wrong } from './revive.ts'
 import { readCodexRuntime } from './codex-runtime.ts'
+import { capturedTranscript, privateRuntimePath } from './autopilot-sandbox.ts'
 import { SecretAccess } from './secret-access.ts'
 import { isAgentProcess } from './agent-process.ts'
 
 /** a log's name (its session id), wherever it lies: one named both by its mirrored path and by its own is one log */
 const logName = (f: string) => f.slice(f.lastIndexOf('/') + 1)
+
+export async function isolatedReady(kind: string, inspect: () => Promise<Pick<AgentInfo, 'agent' | 'interactive_ready'> | undefined>, pause = () => new Promise<void>((resolve) => setTimeout(resolve, 500)), attempts = 120) {
+  for (let i = 0; i < attempts; i++) {
+    const info = await inspect()
+    if (info?.agent === kind && info.interactive_ready === true) return
+    await pause()
+  }
+  throw new Error(`${kind} did not become ready inside its isolation. Autopilot was not started.`)
+}
+
+/** Herdr starts a canonical command in the pane's shell. A login profile may have
+ * replaced its PATH or aliased that command: use a clean non-login sh and verify
+ * its actual process environment BEFORE asking Herdr to start any agent. */
+export const isolatedShellCommand = (wrapper: string) => `exec /usr/bin/env PATH=${q(`${dirname(wrapper)}:/usr/local/bin:/usr/bin:/bin`)} ENV=/dev/null /bin/sh -i`
+export async function isolatedShell(pane: string, wrapper: string, io = {
+  idle: herdr.paneIdle, text: herdr.paneText, keys: herdr.paneKeys, info: herdr.processInfo,
+  read: (file: string) => readFileSync(file, 'utf8'),
+  pause: () => new Promise<void>((resolve) => setTimeout(resolve, 100)),
+}) {
+  const path = `${dirname(wrapper)}:/usr/local/bin:/usr/bin:/bin`
+  let idle = false
+  for (let i = 0; i < 100; i++) { if (await io.idle(pane)) { idle = true; break }; await io.pause() }
+  if (!idle) throw new Error('The isolated launch shell did not become ready. No agent was started.')
+  await io.text(pane, isolatedShellCommand(wrapper))
+  await io.keys(pane, ['enter'])
+  for (let i = 0; i < 100; i++) {
+    const pid = (await io.info(pane)).shell_pid
+    try {
+      const argv = io.read(`/proc/${pid}/cmdline`).split('\0').filter(Boolean)
+      const env = io.read(`/proc/${pid}/environ`).split('\0')
+      if (argv.length === 2 && argv[0] === '/bin/sh' && argv[1] === '-i' && env.includes(`PATH=${path}`) && env.includes('ENV=/dev/null')) return
+    } catch { /* shell is replacing itself */ }
+    await io.pause()
+  }
+  throw new Error('Could not verify the clean isolated launch shell. No agent was started.')
+}
 
 /** the logs with each one once, where it first came, by the path it was named by last (a session carried to another
  *  folder goes on there): the same log twice is read twice, and a big one holds up the server */
@@ -44,6 +82,7 @@ export function uniqueLogs(logs: string[]): string[] {
 
 /** adds a log the record doesn't have yet; true when it was new */
 function addLog(r: AgentRecord, f: string): boolean {
+  if (!f) return false
   if (r.logs.some((x) => logName(x) === logName(f))) return false
   r.logs.push(f)
   return true
@@ -66,6 +105,10 @@ export const launchOf = (r: Pick<AgentRecord, 'kind' | 'model' | 'effort'>) => {
 }
 
 export interface AgentRecord {
+  /** Trusted isolation metadata; never set by a prompt. */
+  isolation?: { run: string; home: string; captures?: string; control: string; path: string }
+  /** Identity of this launch, for startup instructions and queued words: every replacement invalidates the old ones. */
+  launchId?: string
   /** chat key */
   key: string
   /** herdr agent name */
@@ -101,6 +144,8 @@ export interface AgentRecord {
 }
 
 export interface OutItem {
+  generation?: string
+  launchId?: string
   id: string
   key: string
   text: string
@@ -118,12 +163,13 @@ export interface OutItem {
 /** what starts an agent: its record, the first thing it is told, and where its pane comes from when it isn't its
  *  workspace by label (a task's herdr worktree space) */
 /** was: the label its workspace had before, renamed in place when that one is still open */
-export type Spec = Omit<AgentRecord, 'logs' | 'started'> & { first?: string; pane?: () => Promise<string>; was?: string }
+export type Spec = Omit<AgentRecord, 'logs' | 'started'> & { first?: string; pane?: () => Promise<string>; was?: string; fresh?: boolean }
 
 /** why what you send waits: a menu or permission prompt is up, the agent is starting, or (a CLI command) mid-turn */
 export type Hold = 'menu' | 'start' | 'turn'
 
 export interface SendOpts {
+  generation?: string
   /** a reaction line: shown as a faded pill until it goes in */
   reaction?: OutItem['reaction']
   /** starts (or resumes) the agent when it isn't running */
@@ -264,6 +310,13 @@ export class Agents extends Emitter<Events> {
   /** whether its log shows its turn ended after this time: a turn cut short (Esc, a prompt turned down) runs no hook */
   endedSince?: (key: string, at: number) => boolean
 
+  private deliveryPaused = new Set<string>()
+  private relaunching = new Set<string>()
+  pauseDelivery(key: string, on: boolean) { if (on) this.deliveryPaused.add(key); else { this.deliveryPaused.delete(key); void this.deliver(key) } }
+  acceptInput?: (item: OutItem) => boolean
+  prepare?: (spec: Spec) => Promise<Spec>
+  launchAllowed?: (spec: Spec) => void
+
   constructor() {
     super()
     // records written before logs were kept once each, and before a launch was kept: resolved once here, then kept
@@ -347,7 +400,7 @@ export class Agents extends Emitter<Events> {
     try {
       const sessions = new Map<string, { id: string; started: number }>()
       for (const [key, r] of Object.entries(this.records)) {
-        if (r.kind !== 'codex' || !this.info(key)) continue
+        if (r.kind !== 'codex' || r.isolation || !this.info(key)) continue
         const active = this.info(key)?.agent_session
         const id = active?.kind === 'id' ? active.value
           : (active?.kind === 'path' ? active.value : r.logs.at(-1))?.match(/([0-9a-f-]{36})\.jsonl$/)?.[1]
@@ -368,7 +421,7 @@ export class Agents extends Emitter<Events> {
   runtimeHook(key: string) {
     const r = this.records[key]
     if (!r?.hooks || r.kind !== 'claude' || !this.info(key)) return undefined
-    const h = this.hooks.read(mirrored(r.hooks)).runtime
+    const h = this.hooks.read(r.isolation ? privateRuntimePath(r.isolation.home, r.hooks) ?? '' : mirrored(r.hooks)).runtime
     return h && h.at >= r.started && (!h.session || h.session === r.sessionId) ? h : undefined
   }
 
@@ -381,7 +434,7 @@ export class Agents extends Emitter<Events> {
     const now = Date.now()
     const c = this.saidAt.get(key)
     if (c && now - c.at < SAID_MS) return c.said
-    let said = this.hooks.read(mirrored(r.hooks)).said
+    let said = this.hooks.read(r.isolation ? privateRuntimePath(r.isolation.home, r.hooks) ?? '' : mirrored(r.hooks)).said
     if (said && said.state !== 'idle' && this.endedSince?.(key, said.at)) said = { state: 'idle', turnAt: said.turnAt, at: said.at, last: said.last, helper: said.helper, paused: said.paused }
     this.saidAt.set(key, { at: now, said })
     return said
@@ -440,7 +493,7 @@ export class Agents extends Emitter<Events> {
       // learn log files herdr names (its agent integrations report them)
       for (const [name, key] of this.byName) this.learnSession(key, this.live.get(name))
       // and the session its hooks say it is in now, which herdr doesn't name: a /clear starts another
-      for (const key of this.byName.values()) this.followSession(key)
+      for (const key of this.byName.values()) { this.followSession(key); if (this.records[key]?.isolation) this.discoverLog(key) }
       // what waits goes in as soon as its agent can take it
       for (const key of new Set(this.outbox.map((o) => o.key))) if (!this.heldBy(key)) this.deliver(key)
       this.checkStranded()
@@ -465,6 +518,10 @@ export class Agents extends Emitter<Events> {
 
   /** Bind the actual CLI process, not HERDR_PANE_ID (old shells can inherit another pane's id). */
   private async bindRoute(r: AgentRecord, pane: string) {
+    if (r.isolation) {
+      if (!r.finished) { this.routes.set(r.key, `isolated:${r.isolation.run}`); this.emit('routed', r.key) }
+      return
+    }
     const p = await herdr.processInfo(pane)
     const proc = p.foreground_processes?.find((x) => x.pid && isAgentProcess(r.kind, x.argv))
     if (!proc?.pid || r.finished || this.records[r.key]?.finished || this.stopping.has(r.key)) { this.routes.delete(r.key); this.secretAccess.revoke(r.key); return }
@@ -518,7 +575,7 @@ export class Agents extends Emitter<Events> {
   private ranOn(key: string): Background | undefined {
     const r = this.records[key]
     const st = this.status(key)
-    if (r?.kind !== 'claude' || st === 'working' || st === 'blocked' || st === 'gone') return undefined
+    if (r?.kind !== 'claude' || r.isolation || st === 'working' || st === 'blocked' || st === 'gone') return undefined
     const file = this.sessions.status(r.sessionId, r.cwd)
     // its hooks said what still ran as its turn ended; its session file is newer once that work is gone, or once a
     // subagent runs again (one that paused on shells of its own woke)
@@ -535,7 +592,7 @@ export class Agents extends Emitter<Events> {
       const r = this.records[key]
       const st = this.status(key)
       const pane = this.info(key)?.pane_id
-      if (r?.kind === 'claude' && pane && (st === 'idle' || st === 'done') && !this.said(key) && this.sessions.status(r.sessionId, r.cwd) === undefined) {
+      if (r?.kind === 'claude' && !r.isolation && pane && (st === 'idle' || st === 'done') && !this.said(key) && this.sessions.status(r.sessionId, r.cwd) === undefined) {
         const seen = screenBackground(await herdr.visible(pane).catch(() => ''))
         if (seen) this.screens.set(key, seen)
         else this.screens.delete(key)
@@ -604,11 +661,11 @@ export class Agents extends Emitter<Events> {
     const r = this.records[key]
     const s = a?.agent_session
     if (!r || !s) return
-    if (s.kind === 'path' && addLog(r, mirrored(s.value))) {
+    if (s.kind === 'path' && addLog(r, r.isolation ? this.isolatedPath(r, s.value) : mirrored(s.value))) {
       this.save()
       this.emit('logs', key)
     } else if (s.kind === 'id' && r.kind === 'claude') {
-      const p = claudeLogPath(r.cwd, s.value)
+      const p = r.isolation ? this.isolatedPath(r, join(homedir(), '.claude/projects', r.cwd.replace(/[^a-zA-Z0-9-]/g, '-'), `${s.value}.jsonl`)) : claudeLogPath(r.cwd, s.value)
       if (addLog(r, p)) {
         r.sessionId = s.value
         this.save()
@@ -622,10 +679,10 @@ export class Agents extends Emitter<Events> {
   followSession(key: string) {
     const r = this.records[key]
     if (r?.kind !== 'claude' || !r.hooks) return
-    const s = this.hooks.read(mirrored(r.hooks)).session
+    const s = this.hooks.read(r.isolation ? privateRuntimePath(r.isolation.home, r.hooks) ?? '' : mirrored(r.hooks)).session
     // another machine's copy of its events may still be an earlier run's, until the new run's first event comes
     if (!s || s.id === r.sessionId || s.at < r.started - 5000) return
-    const log = s.log ? mirrored(s.log) : claudeLogPath(r.cwd, s.id)
+    const log = r.isolation ? this.isolatedPath(r, s.log ?? join(homedir(), '.claude/projects', r.cwd.replace(/[^a-zA-Z0-9-]/g, '-'), `${s.id}.jsonl`)) : s.log ? mirrored(s.log) : claudeLogPath(r.cwd, s.id)
     r.sessionId = s.id
     addLog(r, log)
     this.save()
@@ -638,6 +695,7 @@ export class Agents extends Emitter<Events> {
     const r = this.records[key]
     if (!r || (r.kind === 'claude' && r.hooks)) return
     const look = () => {
+      if (r.isolation) { this.discoverLog(key); return }
       const f = findLog(r.kind, r.cwd, since - 1000)
       if (!f || !addLog(r, f)) return
       // Claude Code and pi resume by the id in its name; Codex by its last log
@@ -649,11 +707,26 @@ export class Agents extends Emitter<Events> {
     for (const ms of [1500, 5000, 15000, 60000, 180000]) setTimeout(look, ms)
   }
 
+  private isolatedPath(r: AgentRecord, file: string) {
+    if (!r.isolation) return file
+    if (!r.isolation.captures) return ''
+    const mapped = capturedTranscript(r.isolation.captures, r.kind, relative(homedir(), file))
+    return privateRuntimePath(r.isolation.captures, mapped) ?? ''
+  }
+
   /** find a log file this CLI started since the agent (re)started, when herdr didn't name one */
   discoverLog(key: string) {
     const r = this.records[key]
     if (!r) return
     const since = r.started - 5000
+    if (r.isolation) {
+      const dir = join(r.isolation.captures ?? r.isolation.home, r.kind === 'claude' ? '.claude/projects' : r.kind === 'codex' ? '.codex/sessions' : '.pi/agent/sessions')
+      if (!r.isolation.captures || !privateRuntimePath(r.isolation.captures, dir)) return
+      const files = Array.from(new Bun.Glob('**/*.jsonl').scanSync({ cwd: dir, absolute: true, onlyFiles: true, throwErrorOnBrokenSymlink: false })).filter((f) => privateRuntimePath(r.isolation!.captures!, f) && statSync(f).mtimeMs >= since).sort((a,b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+      const f = files.find((f) => !f.includes('/subagents/') && (r.kind === 'codex' ? mainCodexLog(f, r.cwd, true) : !r.sessionId || f.endsWith(`${r.sessionId}.jsonl`)))
+      if (f && addLog(r, f)) { this.save(); this.emit('logs', key) }
+      return
+    }
     const f = r.kind === 'claude' ? (r.sessionId ? claudeLogPath(r.cwd, r.sessionId) : findClaudeLog(r.cwd, since)) : r.kind === 'codex' ? findCodexLog(r.cwd, since) : r.kind === 'pi' ? findPiLog(r.cwd, since) : undefined
     if (f && addLog(r, f)) {
       this.save()
@@ -687,7 +760,7 @@ export class Agents extends Emitter<Events> {
       this.stopping.add(spec.key)
       try {
         const first = await before?.()
-        await this.finish(spec.key)
+        await this.finish(spec.key, true)
         return await this.launch({ ...spec, ...(first ? { first } : {}) })
       } finally {
         this.stopping.delete(spec.key)
@@ -702,6 +775,8 @@ export class Agents extends Emitter<Events> {
   ensure(spec: Spec): Promise<AgentInfo | null> {
     const problem = chatProblem(spec.kind)
     if (problem) return Promise.reject(new Error(problem))
+    if (this.stopping.has(spec.key) && !this.relaunching.has(spec.key)) return this.starting.get(spec.key) ?? Promise.reject(new Error('Coordinator transition in progress.'))
+    this.launchAllowed?.(spec)
     const running = this.live.get(spec.name)
     if (running) return this.bindRoute({ ...this.records[spec.key], ...spec } as AgentRecord, running.pane_id).then(() => running)
     const p0 = this.starting.get(spec.key)
@@ -711,16 +786,25 @@ export class Agents extends Emitter<Events> {
     return p
   }
 
-  private async launch({ first, pane: place, was, ...spec }: Spec) {
+  private async launch(input: Spec) {
+    this.launchAllowed?.(input)
+    const prepared = await (this.prepare?.(input) ?? input)
+    // preparation crosses awaits: whatever owned this launch may have stopped meanwhile
+    this.launchAllowed?.(prepared)
+    const { first, pane: place, was, fresh, ...spec } = prepared
     this.secretAccess.revoke(spec.key)
     this.routes.delete(spec.key)
     const old = this.records[spec.key]
-    const resume = old && old.kind === spec.kind && (old.sessionId || old.logs.length)
+    const resume = !fresh && old && old.kind === spec.kind && (old.sessionId || old.logs.length)
     const r: AgentRecord = old ?? { ...spec, logs: [], started: Date.now() }
     const changedPrompt = old?.system !== spec.system
     const from = old?.cwd
+    r.isolation = spec.isolation
+    if (fresh) { r.model = ''; r.effort = '' }
     Object.assign(r, { name: spec.name, kind: spec.kind, cwd: spec.cwd, workspace: spec.workspace, tab: spec.tab ?? r.tab, env: spec.env ?? r.env, access: spec.access ?? r.access, model: spec.model ?? r.model, effort: spec.effort ?? r.effort, system: spec.system ?? r.system, set: spec.set ?? r.set, finished: false })
     this.codexState.delete(spec.key)
+    r.launchId = randomUUID()
+    if (fresh) this.outbox = this.outbox.filter((item) => item.key !== spec.key || item.cid || !item.text.startsWith('<shepherdr>'))
     r.started = Date.now()
     // what this launch really passes (args), kept as it was: the screen says what it started on, not what the catalog
     // would pass today
@@ -734,14 +818,18 @@ export class Agents extends Emitter<Events> {
     this.save()
     task.mkdirSync(r.cwd, { recursive: true })
     // it starts in another folder now: its session goes with it, where --resume looks for it
-    if (resume && r.kind === 'claude' && r.sessionId && from !== r.cwd) {
+    if (resume && !r.isolation && r.kind === 'claude' && r.sessionId && from !== r.cwd) {
       const id = r.sessionId
       const log = carryClaudeSession(id, r.cwd)
       if (log) r.logs = [...r.logs.filter((f) => !f.endsWith(`/${id}.jsonl`)), log]
     }
-    const pane = place ? await place() : await this.paneFor(r, was)
+    const pane = place && !r.isolation ? await place() : await this.paneFor(r, was)
     const args = this.args(r, !!resume)
     this.save()
+    if (r.isolation) {
+      try { await isolatedShell(pane, r.isolation.path) }
+      catch (e) { r.finished = true; this.save(); await herdr.closePane(pane).catch(() => undefined); throw e }
+    }
     // a new pane needs a moment before its shell is at the prompt
     for (let i = 0; ; i++) {
       try {
@@ -749,15 +837,30 @@ export class Agents extends Emitter<Events> {
         break
       } catch (e) {
         const code = (e as { code?: string }).code
-        if (code === 'agent_not_ready') break
+        if (code === 'agent_not_ready' && !r.isolation) break
         if (i >= 8) {
           console.error(`shepherdr: could not start ${r.name}: ${(e as Error).message}`)
+          r.finished = true
+          this.save()
+          await herdr.closePane(pane).catch(() => undefined)
           throw e
         }
         await new Promise((res) => setTimeout(res, 750))
       }
     }
     await this.refresh()
+    if (r.isolation) {
+      // agent.start only enqueues a terminal command. Never report a successful mode
+      // change until the selected adapter is really accepting chat input.
+      try {
+        await isolatedReady(r.kind, async () => { await this.refresh(); return this.live.get(r.name) })
+      } catch (e) {
+        r.finished = true
+        this.save()
+        await herdr.closePane(pane).catch(() => undefined)
+        throw e
+      }
+    }
     await this.bindRoute(r, pane)
     // CLIs without an option for extra instructions get them first, hidden from the chat. Both wait until the CLI is
     // ready, ahead of what you sent meanwhile (a restart)
@@ -778,9 +881,12 @@ export class Agents extends Emitter<Events> {
       if (resume && r.sessionId) a.push('--resume', r.sessionId)
       else if (r.sessionId) a.push('--session-id', r.sessionId)
       // its hooks tell Shepherdr what it does (readers/hooks.ts), from a settings file of its own: yours stay untouched
-      const h = hookSettings(HOOKS_DIR, r.name)
-      r.hooks = h.events
-      a.push('--settings', h.settings)
+      if (!r.isolation) {
+        const h = hookSettings(HOOKS_DIR, r.name)
+        r.hooks = h.events
+        a.push('--settings', h.settings)
+      }
+      if (r.isolation) a.push('--dangerously-skip-permissions')
       if (r.system) a.push('--append-system-prompt-file', this.promptFile(r))
       if (model) a.push('--model', model)
       if (effort) a.push('--effort', effort)
@@ -792,7 +898,7 @@ export class Agents extends Emitter<Events> {
     } else if (r.kind === 'codex') {
       // Codex tools have their own environment policy. Set the owner explicitly even on resume;
       // do not depend on the pane's login shell or its stale inherited environment.
-      const env = { ...r.env, ...agentEnv(r.key, ROOT) }
+      const env = r.isolation ? { SHEPHERDR_CHAT: r.key, SHEPHERDR_COMMAND: '/run/shepherdr/bin/shepherdr', SHEPHERDR_URL: 'http://127.0.0.1:18765', PATH: '/run/shepherdr/bin:/usr/local/bin:/usr/bin:/bin' } : { ...r.env, ...agentEnv(r.key, ROOT) }
       a.push('-c', `shell_environment_policy.set={${Object.entries(env).map(([k, v]) => `${JSON.stringify(k)}=${JSON.stringify(v)}`).join(',')}}`)
       // its own last log: a task it took over keeps the logs of the agent before it too
       const id = resume ? r.logs.findLast((f) => (logKind(f) ?? 'codex') === 'codex')?.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/)?.[1] : undefined
@@ -806,7 +912,7 @@ export class Agents extends Emitter<Events> {
 
   /** instructions go in a file: long text with quotes and newlines can't travel as a shell argument */
   private promptFile(r: AgentRecord) {
-    const f = promptPath(r.name)
+    const f = r.isolation ? join(r.isolation.control, `${r.name}.prompt.md`) : promptPath(r.name)
     task.mkdirSync(dirname(f), { recursive: true })
     task.writeFileSync(f, r.system ?? '')
     return f
@@ -815,6 +921,7 @@ export class Agents extends Emitter<Events> {
   /** the files Shepherdr starts its CLI with now, by flag: its hooks' settings and its instructions. One started with
    *  others (herdr restored an older command after it restarted) runs without them */
   filesOf(r: AgentRecord): Record<string, string> {
+    if (r.isolation) return {} // host paths differ from the namespace; the wrapper is verified before every launch
     if (r.kind === 'claude') return { '--settings': join(HOOKS_DIR, `${r.name}.settings.json`), ...(r.system ? { '--append-system-prompt-file': promptPath(r.name) } : {}) }
     if (r.kind === 'pi' && r.system) return { '--append-system-prompt': promptPath(r.name) }
     return {}
@@ -838,7 +945,7 @@ export class Agents extends Emitter<Events> {
   /** whether its hooks last said it was at work, even while it is gone: a turn its log shows over is over */
   wasWorking(key: string) {
     const r = this.records[key]
-    const said = r?.hooks ? this.hooks.read(mirrored(r.hooks)).said : undefined
+    const said = r?.hooks ? this.hooks.read(r.isolation ? privateRuntimePath(r.isolation.home, r.hooks) ?? '' : mirrored(r.hooks)).said : undefined
     return said?.state === 'working' && !this.endedSince?.(key, said.at)
   }
 
@@ -853,6 +960,7 @@ export class Agents extends Emitter<Events> {
     this.secretAccess.revoke(key)
     this.routes.delete(key)
     this.stopping.add(key)
+    this.relaunching.add(key)
     try {
       const a = close ? this.info(key) : undefined
       if (a) {
@@ -862,6 +970,7 @@ export class Agents extends Emitter<Events> {
       await start()
     } finally {
       this.stopping.delete(key)
+      this.relaunching.delete(key)
       this.deliver(key)
     }
   }
@@ -895,7 +1004,7 @@ export class Agents extends Emitter<Events> {
   private heldBy(key: string, item?: Pick<OutItem, 'idle'>): Hold | undefined {
     const st = this.status(key)
     // stopping for a restart: what you send goes to the agent it starts on
-    if (st === 'gone' || this.stopping.has(key) || this.info(key)?.interactive_ready === false) return 'start'
+    if (st === 'gone' || this.records[key]?.finished || this.deliveryPaused.has(key) || this.stopping.has(key) || this.info(key)?.interactive_ready === false) return 'start'
     if (st === 'blocked' || this.menuUp?.(key)) return 'menu'
     if (item?.idle && st === 'working') return 'turn'
     return undefined
@@ -915,7 +1024,7 @@ export class Agents extends Emitter<Events> {
     return p
   }
 
-  private async sendNow(key: string, text: string, { reaction, ensure, cid, idle, command }: SendOpts): Promise<Sent> {
+  private async sendNow(key: string, text: string, { reaction, ensure, cid, idle, command, generation }: SendOpts): Promise<Sent> {
     if (cid?.startsWith('requested-news:') && this.newsReceipts.includes(cid)) return { waiting: false, item: { id: cid, cid, key, text, at: Date.now() } }
     const again = cid && this.outbox.find((o) => o.cid === cid)
     if (again) return { waiting: true, waitsFor: this.whyWaits(key), item: again }
@@ -923,8 +1032,9 @@ export class Agents extends Emitter<Events> {
     if (done) return { waiting: false, item: done }
     // sent again after it failed: it is on its way once more
     if (cid) this.failures = this.failures.filter((f) => f.cid !== cid)
-    const item: OutItem = { id: randomUUID(), key, text, reaction, at: Date.now(), ...(cid ? { cid } : {}), ...(idle ? { idle } : {}), ...(command ? { command } : {}) }
-    if (this.status(key) === 'gone' && ensure && cid) {
+    const item: OutItem = { generation, id: randomUUID(), key, text, reaction, at: Date.now(), ...(cid ? { cid } : {}), ...(idle ? { idle } : {}), ...(command ? { command } : {}) }
+    if (item.launchId && item.launchId !== this.records[key]?.launchId || this.acceptInput && !this.acceptInput(item)) return { waiting: false, item }
+    if (this.status(key) === 'gone' && ensure && cid && !this.deliveryPaused.has(key)) {
       try {
         await ensure()
       } catch (e) {
@@ -933,6 +1043,7 @@ export class Agents extends Emitter<Events> {
       if (this.status(key) === 'gone') throw new Error(this.reachable ? "The agent isn't running." : "Can't reach herdr.")
     }
     await this.beforeInput?.(key)
+    if (item.launchId && item.launchId !== this.records[key]?.launchId || this.acceptInput && !this.acceptInput(item)) return { waiting: false, item }
     // what waits goes first, so nothing overtakes it
     let hold: Hold | undefined
     if (!this.holdOf(key, item) && !this.outbox.some((o) => o.key === key)) {
@@ -995,12 +1106,14 @@ export class Agents extends Emitter<Events> {
       for (;;) {
         const next = this.outbox.find((o) => o.key === key)
         if (!next) return void this.unready.delete(key)
+        if (next.launchId && next.launchId !== this.records[key]?.launchId || this.acceptInput && !this.acceptInput(next)) { this.outbox = this.outbox.filter((o) => o !== next); this.save(); continue }
         if (next.cid?.startsWith('requested-news:') && this.newsReceipts.includes(next.cid)) {
           this.outbox = this.outbox.filter((o) => o !== next)
           this.save()
           continue
         }
         await this.beforeInput?.(key)
+        if (next.launchId && next.launchId !== this.records[key]?.launchId || this.acceptInput && !this.acceptInput(next)) { this.outbox = this.outbox.filter((o) => o !== next); this.save(); continue }
         if (this.heldBy(key, next)) return
         await this.put(key, next)
         this.unready.delete(key)
@@ -1040,7 +1153,7 @@ export class Agents extends Emitter<Events> {
   /** ahead: before what waits for this agent already */
   private queue(key: string, texts: string[], ahead = false) {
     if (!texts.length) return
-    const items = texts.map((text) => ({ id: randomUUID(), key, text, at: Date.now() }))
+    const items = texts.map((text) => ({ launchId: this.records[key]?.launchId, id: randomUUID(), key, text, at: Date.now() }))
     const i = ahead ? this.outbox.findIndex((o) => o.key === key) : -1
     if (i < 0) this.outbox.push(...items)
     else this.outbox.splice(i, 0, ...items)
@@ -1111,7 +1224,7 @@ export class Agents extends Emitter<Events> {
   }
 
   /** end a task agent's run: its pane closes; its chat stays and writing to it resumes it */
-  async finish(key: string) {
+  async finish(key: string, strict = false) {
     this.secretAccess.revoke(key)
     this.routes.delete(key)
     const r = this.records[key]
@@ -1119,7 +1232,8 @@ export class Agents extends Emitter<Events> {
     if (r) r.finished = true
     this.save()
     if (!a) return
-    await herdr.closePane(a.pane_id).catch(() => undefined)
+    if (strict) await herdr.closePane(a.pane_id)
+    else await herdr.closePane(a.pane_id).catch(() => undefined)
     // gone from what herdr runs at once: starting it again (a backup agent taking over) starts a new one
     await this.refresh()
   }

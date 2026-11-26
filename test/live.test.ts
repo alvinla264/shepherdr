@@ -505,8 +505,10 @@ describe('settings', () => {
     expect(s.get('coordinator.agent')).toBe('Claude Code')
     expect(s.get('brief.review')).toBe('on')
     expect(s.get('brief.merge')).toBe('on its own')
-    // Autopilot has no limits of its own: a limit the human wants is words in its HEARTBEAT.md
-    expect(CATALOG.find((x) => x.name === 'Autopilot')!.rows.map((r) => r.key)).toEqual(['heartbeat.when', 'heartbeat.on'])
+    // Autopilot: one wake-up schedule and its events, an optional agent, then the shared access and usage limits
+    const pilot = CATALOG.find((x) => x.name === 'Autopilot')!.rows.map((r) => r.key)
+    expect(pilot.slice(0, 2)).toEqual(['heartbeat.when', 'heartbeat.on'])
+    for (const key of ['autopilot.agent', 'autopilot.access', 'autopilot.hosts', 'autopilot.secrets', 'autopilot.approvals', 'autopilot.traffic', 'autopilot.tokens', 'autopilot.runtime', 'autopilot.parallel']) expect(pilot).toContain(key)
     // what the model judges for itself is no setting: tasks a day, retries, time per task, when to hand back, tasks at once
     for (const k of ['autopilot.tasksPerDay', 'autopilot.hours', 'autopilot.when', 'autopilot.atOnce', 'autopilot.retries', 'autopilot.pauseAfter', 'autopilot.brakeAfter', 'brief.waitChecks', 'machine.limitBy']) expect(s.set(k, 'any').ok).toBe(false)
     for (const k of ['check.command', 'merge.by', 'plan.approve', 'worker.agent', 'limit.tokens', 'agent']) expect(s.set(k, 'x').ok).toBe(false)

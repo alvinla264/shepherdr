@@ -1,15 +1,39 @@
 // shepherdr merge on a real git repo (engine-world.ts): it squash-merges into main and cleans up, here (rebased) or
 // through a pull request on GitHub (a stand-in; rebased only on a conflict).
 import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sh, repo, world, until, started, G, Settings } from './engine-world.ts'
+import { mergeHere } from '../server/live/engine/git.ts'
 import type { FakeGitHub } from './fake-gh.ts'
 
 // each test runs git dozens of times and gh (a bun process of its own) up to fifty: a few seconds alone, past 20 on a
 // machine as busy as a CI runner can get
 setDefaultTimeout(60_000)
+
+describe('a broker merge in a derived worktree', () => {
+  test('runs no repository hook from the checked-out branch', async () => {
+    const dir = repo()
+    const marker = join(mkdtempSync(join(tmpdir(), 'shep-hook-mark-')), 'ran')
+    // the repository itself trusts a tracked hooks folder; the worker only adds a hook inside its own branch
+    sh('git config core.hooksPath .githooks', dir)
+    sh('git checkout -q -b work', dir)
+    mkdirSync(join(dir, '.githooks'), { recursive: true })
+    writeFileSync(join(dir, '.githooks', 'post-commit'), `#!/bin/sh\necho ran > ${marker}\n`, { mode: 0o755 })
+    sh('git add -A && git commit -qm "track a hook"', dir)
+    // the hook is real: that ordinary commit ran it
+    expect(existsSync(marker)).toBe(true)
+    rmSync(marker, { force: true })
+    // a branch other than the merge target is checked out here, so the merge happens in its scratch worktree
+    sh('git checkout -q -b elsewhere main', dir)
+    // no sandbox was prepared in this process: the merge itself must still keep the host clear of the hook
+    const r = await mergeHere(dir, 'work', 'main', 'merge work', true)
+    expect(r.ok).toBe(true)
+    expect(existsSync(marker)).toBe(false)
+    expect(sh('git log --format=%s -n 1 main', dir)).toBe('merge work')
+  })
+})
 
 describe('shepherdr merge', () => {
   test('rebases on main, squash-merges into main, marks it merged and cleans up once the turn ends', async () => {

@@ -368,7 +368,7 @@ describe.skipIf(!browser)('the UI pass (SHE-81)', () => {
     }
   }, 30_000)
 
-  test("Settings → Autopilot: its three settings, the heartbeat and its news in words with presets, and the place's own HEARTBEAT.md, edited and saved (phone)", async () => {
+  test('Settings → Autopilot: one plain Heartbeat, its wake-ups in words, a collapsed access profile and Run now (phone)', async () => {
     const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
     await page.goto(at(`place=${encodeURIComponent('p:vm-str:gtm')}`))
     await page.getByRole('button', { name: 'Places' }).click()
@@ -380,29 +380,42 @@ describe.skipIf(!browser)('the UI pass (SHE-81)', () => {
     const pilot = settings.getByRole('region', { name: 'Autopilot' })
     await pilot.waitFor()
     const text = (await pilot.textContent())!
-    // the rule in words with its next runs, never as written; the news that wakes it at once
-    for (const words of ['Heartbeat', 'Every 30 minutes (Stockholm)', 'Next: ', 'Wakes at once on', 'All news', 'Ask the coordinator for anything else', 'Checklist', 'HEARTBEAT.md', 'Write it in the checklist']) expect(text).toContain(words)
-    for (const words of ['FREQ=', 'RRULE', 'Quiet hours', 'Heartbeat every', 'Max new tasks']) expect(text).not.toContain(words)
+    // one brief first, then the wake-up in words, the agent, and the access profile folded away
+    for (const words of ['Heartbeat', 'Every 30 minutes (Stockholm)', 'Next: ', 'Events', 'All news', 'Agent', 'Access and limits', 'Permission profile', 'Run now']) expect(text).toContain(words)
+    for (const words of ['FREQ=', 'RRULE', 'Quiet hours', 'Checklist', 'Write it in the checklist']) expect(text).not.toContain(words)
+    // the generated runtime settings are shown in full, as plain text
+    expect(await pilot.getByText('Permission profile: Isolated workspace.', { exact: false }).count()).toBeGreaterThan(0)
+    expect(await pilot.getByText('No automatic fallback.', { exact: false }).count()).toBeGreaterThan(0)
+    // what the run has done, beside the wake-up
+    for (const row of ['Time zone', 'Last run']) expect(await pilot.getByText(row, { exact: true }).count()).toBe(1)
+    expect(await pilot.getByText('Europe/Stockholm', { exact: true }).count()).toBe(1)
     // a preset: picked, it is the rule in words at once, set here with a Reset back to the default
-    const presets = pilot.getByRole('group', { name: 'Heartbeat' })
+    const presets = pilot.getByRole('group', { name: 'When' })
     expect(await presets.getByRole('button').allInnerTexts()).toEqual(['15 min', '30 min', '1 hour', 'Workdays'])
     expect(await presets.getByRole('button', { name: '30 min' }).getAttribute('aria-pressed')).toBe('true')
     await presets.getByRole('button', { name: 'Workdays' }).click()
     await pilot.getByText('Every 30 minutes, 8:00-18:00, Monday to Friday (Stockholm)').waitFor()
     expect(await presets.getByRole('button', { name: 'Workdays' }).getAttribute('aria-pressed')).toBe('true')
     await pilot.getByRole('button', { name: "Reset to Everywhere's" }).click()
-    await pilot.getByText('Every 30 minutes (Stockholm)').waitFor()
-    // the news: all, or none that waits for the heartbeat
-    const news = pilot.getByRole('group', { name: 'Wakes at once on' })
+    await pilot.getByText('Every 30 minutes (Stockholm)', { exact: true }).waitFor()
+    // the events: all, or none that waits for the heartbeat
+    const news = pilot.getByRole('group', { name: 'Events' })
     // in words, not the button of the same name
     const words = (w: string) => pilot.getByRole('paragraph').filter({ hasText: new RegExp(`^${w}$`) })
     await news.getByRole('button', { name: 'None: it waits' }).click()
     await words('No news').waitFor()
     await news.getByRole('button', { name: 'All news' }).click()
     await words('All news').waitFor()
-    const doc = pilot.getByRole('textbox', { name: 'Checklist' })
+    // the access profile is folded away until asked for
+    const limits = pilot.getByText('Access and limits', { exact: true }).locator('xpath=..')
+    expect(await limits.getAttribute('open')).toBeNull()
+    await pilot.getByText('Access and limits', { exact: true }).click()
+    expect(await limits.getAttribute('open')).not.toBeNull()
+    // its label carries the inherited value under it, so match by the row's name
+    await pilot.locator('dt').filter({ hasText: 'Maximum parallel tasks' }).waitFor()
+    const doc = pilot.getByRole('textbox', { name: 'Heartbeat' })
     expect(await doc.inputValue()).toContain('Tasks stuck or stalled')
-    // the checklist reads as prose, not a code box: normal text, no mono font, no inset frame
+    // the Heartbeat reads as prose, not a code box: normal text, no mono font, no inset frame
     const look = await doc.evaluate((el) => ({
       font: getComputedStyle(el).fontFamily,
       size: parseFloat(getComputedStyle(el).fontSize),
@@ -420,6 +433,10 @@ describe.skipIf(!browser)('the UI pass (SHE-81)', () => {
     await pilot.getByRole('button', { name: 'Save' }).click()
     await pilot.getByRole('button', { name: 'Save' }).waitFor({ state: 'detached' })
     expect(await doc.inputValue()).toBe('- Keep the live link working\n- Ship the onboarding flow')
+    // Run now queues a wake for this run, with no error on a healthy demo
+    await pilot.getByRole('button', { name: 'Run now' }).click()
+    await pilot.getByRole('button', { name: 'Run now' }).waitFor()
+    expect(await pilot.getByRole('alert').count()).toBe(0)
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
     await page.close()
   }, 30_000)
@@ -448,7 +465,9 @@ describe.skipIf(!browser)('the UI pass (SHE-81)', () => {
           const r = (await box.boundingBox())!
           expect(r.x + r.width).toBeLessThanOrEqual(375)
         }
-        expect(await region.locator('dd .truncate').evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth).map((e) => e.textContent))).toEqual([])
+        // a value is whole; a measuring span or one folded inside a closed disclosure is not a value on screen
+        const cut = await region.locator('dd .truncate').evaluateAll((els) => els.filter((e) => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden' && !e.closest('details:not([open])') && e.scrollWidth > e.clientWidth).map((e) => e.textContent))
+        expect(cut).toEqual([])
         return region
       }
       const back = async (region: Locator) => {
