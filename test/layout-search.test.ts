@@ -24,11 +24,16 @@ describe.skipIf(!browser)('unified search', () => {
       await openSearch(page)
       expect(await page.getByRole('button', { name: 'Everywhere', exact: true }).getAttribute('aria-pressed')).toBe('true')
       await page.getByRole('combobox', { name: 'Search or jump to' }).fill('receipt ledger')
+      // the group shows the previous, unfiltered list (every message) while it says Filtering…: page only the
+      // settled query's results, with every chat read
+      const list = page.getByRole('listbox', { name: 'Search results' })
+      expect(await until(() => list.getAttribute('aria-busy'), (v) => v === 'false')).toBe('false')
       const found = page.getByRole('group', { name: 'Messages', exact: true })
       await found.getByRole('option').first().waitFor()
       expect(await found.getByRole('option').count()).toBe(8)
       await found.getByRole('button', { name: /Show more messages/ }).click()
-      expect(await found.getByRole('option').count()).toBe(25)
+      // the page it adds arrives a moment after the click: wait for the count itself, not a sleep
+      expect(await until(() => found.getByRole('option').count(), (n) => n === 25)).toBe(25)
       await found.getByRole('option', { name: /^Receipt ledger line 24 / }).click()
       expect(page.url()).toContain('task=LV-3')
       const target = page.locator('[data-msg="ledger-24"]')

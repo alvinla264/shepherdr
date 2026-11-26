@@ -500,6 +500,9 @@ describe.skipIf(!browser)("a task's side panel", () => {
       const frame = () => fake.toPanels({ type: 'frame', seq: 1, data: white, metadata: { deviceWidth: 1280, deviceHeight: 720, scrollOffsetX: 0, scrollOffsetY: 0 } })
       const page = await browser!.newPage({ viewport: { width: 1600, height: 900 }, colorScheme: 'dark' })
       await page.goto(task('GTM-15'))
+      // the task view is up before its header is asked for the toggle: a count right after goto can still be 0,
+      // and the click that follows would wait for a tab that only its click opens
+      await page.getByRole('textbox', { name: 'Message GTM-15…' }).waitFor()
       const toggle = page.getByRole('button', { name: 'Show task panel' })
       if (await toggle.count()) await toggle.click()
       await page.getByRole('tab', { name: 'Browser' }).click()
