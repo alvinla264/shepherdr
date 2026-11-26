@@ -543,6 +543,25 @@
   }
 }
 
+/* A file read as a document (a worktree's Markdown): the chat's prose, with a document's heading scale */
+@utility prose-doc {
+  & .prose-reply h1 {
+    font-size: 1.5em;
+  }
+  & .prose-reply h2 {
+    font-size: 1.25em;
+  }
+  & .prose-reply h3 {
+    font-size: 1.0625em;
+  }
+  & .prose-reply :is(h1, h2, h3, h4) {
+    margin: 16px 0 6px;
+  }
+  & .prose-reply > :first-child {
+    margin-top: 0;
+  }
+}
+
 /* Code in the side panel (Files, Diff): monospace, highlight.js's tokens in the theme's calm colours */
 @utility code-view {
   font: 12px/1.65 var(--font-mono);

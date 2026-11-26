@@ -58,7 +58,8 @@ Every agent, coordinator or task agent, gets the same chat.
   each a full-screen sheet that Back closes (on a desktop its ⋯ lists them too). Every chat's ⋯, a task's or a
   coordinator's, starts with **Search in this chat**. All of it is read only. Terminal is the agent's live herdr terminal: click
   it and every key goes in, Esc too; `Ctrl+`` ` opens it and goes back to the chat. Files lists the worktree (tracked
-  files and new ones git doesn't ignore), finds one by name and shows it highlighted. Diff shows what the task changed
+  files and new ones git doesn't ignore), finds one by name and shows it by its kind: Markdown as formatted text, an
+  HTML page in a sealed frame, anything else as highlighted source. Diff shows what the task changed
   against where it left main, committed or not: its files as a tree with lines added and taken out, and each file's
   unified diff. Pull request shows the task's PR on GitHub (state, checks, a link), asked of `gh` on the remote's own
   host; greyed out until one is open. The server reads only that worktree: a file is read only when git lists it

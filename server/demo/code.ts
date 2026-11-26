@@ -15,6 +15,10 @@ const FILES: Record<string, string> = {
   'test/signature.test.ts':
     "import { expect, test } from 'bun:test'\nimport { createHmac } from 'node:crypto'\nimport { verifySignature } from '../src/webhooks/signature.ts'\n\nconst sign = (b: string) => createHmac('sha256', 's3cret').update(b).digest('hex')\n\ntest('a body signed with the secret passes', () => {\n  expect(verifySignature('{\"a\":1}', sign('{\"a\":1}'), 's3cret')).toBe(true)\n})\n\ntest('a re-encoded body fails', () => {\n  expect(verifySignature('{ \"a\": 1 }', sign('{\"a\":1}'), 's3cret')).toBe(false)\n})\n",
   'docs/logo.png': '\0PNG',
+  'docs/report.md':
+    '# Q3 report\n\nRevenue is up on last quarter.\n\n- Webhooks are live\n- Enrichment covers three providers\n- Outbound starts next week\n\nRead the [rollout notes](https://example.com/rollout).\n',
+  'docs/page.html':
+    '<!doctype html>\n<html>\n<head>\n<style>h1{color:rgb(194 65 12)}</style>\n</head>\n<body>\n<h1>Enrichment preview</h1>\n<p>Company <b>Acme</b> with 40 employees.</p>\n<script>document.querySelector("b").textContent += " Ltd"</script>\n</body>\n</html>\n',
 }
 
 /** each task's changes: its patches, by file */

@@ -5,6 +5,8 @@
 import clsx from 'clsx'
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { definePlugin, setUI, useStore } from '@client/kernel.ts'
+import { Markdown } from '@plugins/chat/markdown.tsx'
+import { sealedPage } from '@shared/sealed.ts'
 import { escapeHtml, highlighter, HIGHLIGHT_MAX, highlightLine, highlightLines, languageOf, loadHighlighter } from '@client/highlight.ts'
 import { BackIcon, CheckCircleIcon, ClockIcon, DiffIcon, FileIcon, FolderIcon, FolderOpenIcon, ic, IconButton, MinusCircleIcon, NextIcon, OpenIcon, PrIcon, ReloadIcon, SearchIcon, Small, XCircleIcon } from '@client/ui.tsx'
 import type { Diff, DiffFile, FileText, Patch, PrCheck, PullRequest, Task, TreeFiles } from '@shared/types.ts'
@@ -300,6 +302,26 @@ function Code({ text, path }: { text: string; path: string }) {
   )
 }
 
+/* ---------- a file as a document ---------- */
+
+/** the most markdown parsed into the DOM at once, as the code view caps its highlighting: a longer file shows its
+    start, and says so */
+const MARKDOWN_MAX = HIGHLIGHT_MAX
+
+/** what a file is, by its name: a document the chat knows how to draw, a page to seal, or code as it always was */
+function kindOf(path: string): 'markdown' | 'html' | 'code' {
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  if (name.endsWith('.md') || name.endsWith('.markdown')) return 'markdown'
+  if (name.endsWith('.html') || name.endsWith('.htm')) return 'html'
+  return 'code'
+}
+
+/** A page an agent wrote, sealed in a frame of its own: its inline styles and scripts run, nothing reaches the
+    network, and it can't touch the app (no allow-same-origin, as an artifact's frame) */
+function HtmlPreview({ text, path }: { text: string; path: string }) {
+  return <iframe title={`${path} preview`} sandbox="allow-scripts allow-forms" srcDoc={sealedPage(text)} className="block min-h-0 w-full flex-1 border-0 bg-transparent" />
+}
+
 /* ---------- Files ---------- */
 
 /** the up and down arrows walk a list of buttons, which is one stop for Tab */
@@ -376,6 +398,8 @@ function FilesView({ task }: { task: Task }) {
 
 function FileView({ task, path }: { task: Task; path: string }) {
   const f = useAsk<FileText>(task.id, { what: 'file', path })
+  const kind = kindOf(path)
+  const text = f.data?.text ?? ''
   return (
     <>
       <Bar onReload={f.reload} loading={f.spin}>
@@ -391,9 +415,25 @@ function FileView({ task, path }: { task: Task; path: string }) {
       ) : (
         <>
           {f.data.tooBig ? <Note>Only its first megabyte shows.</Note> : null}
-          <Code text={f.data.text ?? ''} path={path} />
+          {kind === 'html' ? <HtmlPreview text={text} path={path} /> : kind === 'markdown' ? <MarkdownFile text={text} /> : <Code text={text} path={path} />}
         </>
       )}
+    </>
+  )
+}
+
+/** Markdown as the chat draws it (same sanitiser), in the space the code view uses, capped where the DOM would get
+    too big */
+function MarkdownFile({ text }: { text: string }) {
+  const cut = text.length > MARKDOWN_MAX
+  return (
+    <>
+      {cut ? <Note>Only its first {(MARKDOWN_MAX / 1000).toFixed(0)} KB shows.</Note> : null}
+      <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain">
+        <div className="prose-doc px-4 py-3 phone:px-5 phone:py-4">
+          <Markdown text={cut ? text.slice(0, MARKDOWN_MAX) : text} />
+        </div>
+      </div>
     </>
   )
 }
