@@ -12,6 +12,16 @@ async function openSearch(page: Page) {
   await page.getByRole('combobox', { name: 'Search or jump to' }).waitFor()
 }
 
+/** fill the box and wait for the settled query's results: the sheet keeps showing the previous, unfiltered list (and
+ *  its options, ready to click) while it says Filtering… for a 120 ms debounce, so a click before this picks whatever
+ *  the old query had first */
+async function search(page: Page, query: string) {
+  await page.getByRole('combobox', { name: 'Search or jump to' }).fill(query)
+  const list = page.getByRole('listbox', { name: 'Search results' })
+  expect(await until(() => list.getAttribute('aria-busy'), (v) => v === 'false')).toBe('false')
+  return list
+}
+
 describe.skipIf(!browser)('unified search', () => {
   for (const width of [390, 1440]) test(`paging reaches the exact message (${width}px)`, async () => {
     const source = world.chats['LV-3/Agent']
@@ -23,11 +33,7 @@ describe.skipIf(!browser)('unified search', () => {
       await page.getByRole('textbox', { name: /^Message / }).first().waitFor()
       await openSearch(page)
       expect(await page.getByRole('button', { name: 'Everywhere', exact: true }).getAttribute('aria-pressed')).toBe('true')
-      await page.getByRole('combobox', { name: 'Search or jump to' }).fill('receipt ledger')
-      // the group shows the previous, unfiltered list (every message) while it says Filtering…: page only the
-      // settled query's results, with every chat read
-      const list = page.getByRole('listbox', { name: 'Search results' })
-      expect(await until(() => list.getAttribute('aria-busy'), (v) => v === 'false')).toBe('false')
+      await search(page, 'receipt ledger')
       const found = page.getByRole('group', { name: 'Messages', exact: true })
       await found.getByRole('option').first().waitFor()
       expect(await found.getByRole('option').count()).toBe(8)
@@ -72,10 +78,7 @@ describe.skipIf(!browser)('unified search', () => {
       await page.goto(url())
       await page.getByRole('textbox', { name: /^Message / }).first().waitFor()
       await openSearch(page)
-      await page.getByRole('combobox', { name: 'Search or jump to' }).fill('very-late-sentence')
-      const list = page.getByRole('listbox', { name: 'Search results' })
-      await list.waitFor()
-      expect(await until(() => list.getAttribute('aria-busy'), (v) => v === 'false')).toBe('false')
+      await search(page, 'very-late-sentence')
       chat.messages.push({ id: 'very-late-hit', who: 'agent', text: 'A very-late-sentence arrives', at: Date.now() })
       world.emit('chat', key)
       await page.getByRole('option', { name: /^A very-late-sentence arrives/ }).waitFor()
@@ -99,7 +102,7 @@ describe.skipIf(!browser)('unified search', () => {
     // give the Tasks pane the keys, as a click in it would
     await tasks.evaluate((n) => { (n as HTMLElement).tabIndex = -1; (n as HTMLElement).focus() })
     await openSearch(page)
-    await page.getByRole('combobox', { name: 'Search or jump to' }).fill('Rerun CI on main')
+    await search(page, 'Rerun CI on main')
     const messages = page.getByRole('group', { name: 'Messages', exact: true })
     await messages.getByRole('option').first().waitFor()
     await messages.getByRole('option').first().click()
@@ -114,7 +117,7 @@ describe.skipIf(!browser)('unified search', () => {
     await page.goto(url())
     await page.getByRole('textbox', { name: /^Message / }).first().waitFor()
     await openSearch(page)
-    await page.getByRole('combobox', { name: 'Search or jump to' }).fill('draft')
+    await search(page, 'draft')
     const artifacts = page.getByRole('group', { name: 'Artifacts', exact: true })
     await artifacts.getByRole('option').first().waitFor()
     await artifacts.getByRole('option').first().click()
