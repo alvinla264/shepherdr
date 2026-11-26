@@ -144,3 +144,45 @@ describe.skipIf(!browser)('chat agent choices', () => {
     }
   }, 30_000)
 })
+
+describe.skipIf(!browser)('task IDs', () => {
+  test('a space states its prefix and next number, nothing to reset, and a refused number says why (desktop)', async () => {
+    const { taskIdsSection } = await import('../server/live/task-ids.ts')
+    const before = { sections: world.sections, act: world.act }
+    const level = 'p:vm-str:gtm'
+    world.sections = [...before.sections, taskIdsSection(level, 'vm-str', 'GAME', 100)]
+    const act = before.act.bind(world)
+    // a number going back is the server's refusal, in its own words under the box
+    world.act = async (a) => (a.type === 'setting' && a.key === 'taskIds.next' ? { ok: false, error: 'Use 100 or higher. Earlier numbers are reserved.' } : act(a))
+    world.emit('snapshot')
+    const page = await browser!.newPage({ viewport: { width: 1280, height: 900 } })
+    try {
+      await page.goto(url())
+      await page.getByRole('button', { name: 'Settings', exact: true }).click()
+      const settings = page.getByRole('region', { name: 'Settings' })
+      // every space has its own page, so the home space picked first has none
+      expect(await settings.getByRole('button', { name: 'Task IDs', exact: true }).count()).toBe(0)
+      await settings.getByRole('button', { name: /^Editing:/ }).click()
+      await page.getByRole('menuitemradio', { name: /gtm/ }).click()
+      await settings.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Task IDs', exact: true }).click()
+      const ids = settings.getByRole('region', { name: 'Task IDs' })
+      await ids.getByRole('textbox', { name: 'Prefix', exact: true }).waitFor()
+      // two typed values and the ID the next task will get; no inherited value to go back to
+      expect(await ids.getByRole('textbox').count()).toBe(2)
+      expect(await ids.getByRole('textbox', { name: 'Prefix', exact: true }).inputValue()).toBe('GAME')
+      expect(await ids.getByRole('textbox', { name: 'Next number', exact: true }).inputValue()).toBe('100')
+      expect(await ids.textContent()).toContain('Next task: GAME-100')
+      expect(await ids.getByRole('button', { name: /^Reset to/ }).count()).toBe(0)
+      expect(await ids.textContent()).not.toContain('The rest follows')
+      // a number that would go back: the box stays as typed, and says what to use instead
+      await ids.getByRole('textbox', { name: 'Next number', exact: true }).fill('7')
+      await ids.getByRole('textbox', { name: 'Next number', exact: true }).press('Tab')
+      await ids.getByRole('status').filter({ hasText: 'Use 100 or higher' }).waitFor()
+    } finally {
+      world.sections = before.sections
+      world.act = before.act
+      world.emit('snapshot')
+      await page.close()
+    }
+  }, 30_000)
+})

@@ -2244,3 +2244,48 @@ describe('agent process identity', () => {
     }
   })
 })
+
+describe('task IDs set in a space’s Settings', () => {
+  const repo = (name: string) => {
+    const dir = mkdtempSync(join(tmpdir(), `shep-src-ids-${name}-`))
+    execSync('git init -q -b main', { cwd: dir, shell: '/bin/sh' })
+    return dir
+  }
+  test('the prefix and next number decide new tasks only; a rename keeps them, and other levels refuse', async () => {
+    const p = await src.places.add(repo('game'), 'id-game')
+    const place = placeId.space(p.name)
+    const set = (key: string, value: string | null, level = place) => src.act({ type: 'setting', place: level, key, value })
+    expect(await set('taskIds.prefix', 'GAME')).toEqual({ ok: true })
+    expect(await set('taskIds.next', '100')).toEqual({ ok: true })
+    const first = src.engine.add({ project: p.name, title: 'Numbered', by: 'test', later: true })
+    expect(first.id).toBe('GAME-100')
+    expect(src.places.space(place)?.key).toBe('GAME')
+    // the name that shows changes; the ID and its prefix stay
+    expect(await src.act({ type: 'rename', id: place, name: 'pretty-game' })).toEqual({ ok: true })
+    expect(src.places.space(place)?.key).toBe('GAME')
+    expect(first.id).toBe('GAME-100')
+    // earlier numbers, a malformed prefix, and a level that is not a space: each refused in plain words
+    expect(await set('taskIds.next', '100')).toMatchObject({ ok: false, error: expect.stringContaining('reserved') })
+    expect(await set('taskIds.prefix', 'game')).toMatchObject({ ok: false, error: expect.stringContaining('capital letters') })
+    for (const level of ['all', placeId.machine(), placeId.home(), 'p:vm-str:nowhere']) expect(await set('taskIds.next', '999', level)).toMatchObject({ ok: false, error: 'Select a repository space in Settings.' })
+    // a new prefix carries on counting where the space was
+    expect(await set('taskIds.prefix', 'PLAY')).toEqual({ ok: true })
+    expect(src.engine.add({ project: 'pretty-game', title: 'Next', by: 'test', later: true }).id).toBe('PLAY-101')
+    // one page per repository space, and it says where the space is now
+    const pages = src.snapshot().settings.filter((s) => s.name === 'Task IDs')
+    expect(pages.find((s) => s.level === place)?.rows.map((r) => r.value)).toEqual(['PLAY', '102'])
+    expect(pages.every((s) => s.level?.startsWith('p:') && !s.level.endsWith(':~'))).toBe(true)
+  })
+  test('a prefix another space uses, or once used, is refused', async () => {
+    const one = await src.places.add(repo('one'), 'id-one')
+    const two = await src.places.add(repo('two'), 'id-two')
+    const set = (place: string, prefix: string) => src.act({ type: 'setting', place, key: 'taskIds.prefix', value: prefix })
+    expect(await set(placeId.space(one.name), 'SHARED')).toEqual({ ok: true })
+    expect(await set(placeId.space(two.name), 'SHARED')).toMatchObject({ ok: false, error: 'That prefix is already used or reserved on this machine.' })
+    // the one it was added under stays its own: a key a space has used cannot be handed to the next one
+    const was = one.key
+    expect(await set(placeId.space(one.name), 'ONCE')).toEqual({ ok: true })
+    expect(await set(placeId.space(two.name), was)).toMatchObject({ ok: false, error: 'That prefix is already used or reserved on this machine.' })
+    expect(await set(placeId.space(two.name), 'ONCE')).toMatchObject({ ok: false })
+  })
+})
