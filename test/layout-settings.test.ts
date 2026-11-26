@@ -186,3 +186,51 @@ describe.skipIf(!browser)('task IDs', () => {
     }
   }, 30_000)
 })
+
+describe.skipIf(!browser)('private instructions', () => {
+  test('a role’s rules save at the scope picked, a blank there means none, and Reset inherits again (phone)', async () => {
+    const store = world.stores['vm-str']
+    const before = world.sections
+    store.set('task.instructions', 'Everywhere rule.')
+    world.sections = demoSettings(world.stores)
+    world.emit('snapshot')
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    try {
+      await page.goto(url())
+      await page.getByRole('button', { name: 'Places' }).click()
+      await page.getByRole('button', { name: 'Settings', exact: true }).click()
+      const settings = page.getByRole('region', { name: 'Settings' })
+      await settings.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Private instructions', exact: true }).click()
+      const panel = settings.getByRole('region', { name: 'Private instructions' })
+      await panel.getByRole('button', { name: /^Editing:/ }).waitFor()
+      const task = panel.getByRole('textbox', { name: 'Task agents', exact: true })
+      expect(await task.inputValue()).toBe('Everywhere rule.')
+      // typing alone saves nothing: Undo puts back what the page holds
+      await task.fill('Unsaved.')
+      await panel.getByRole('button', { name: 'Undo', exact: true }).click()
+      expect(await task.inputValue()).toBe('Everywhere rule.')
+      // saved at this space, and for that role only
+      await task.fill('This space only.')
+      await panel.getByRole('button', { name: 'Save', exact: true }).click()
+      await panel.getByRole('button', { name: 'Reset to private rules', exact: true }).waitFor()
+      expect(store.get('task.instructions', '~')).toBe('This space only.')
+      expect(store.get('task.instructions')).toBe('Everywhere rule.')
+      expect(store.get('coordinator.instructions', '~')).toBeFalsy()
+      // an empty save is a choice: no private rules here, nothing inherited; Reset brings Everywhere's back
+      await task.fill('')
+      await panel.getByRole('button', { name: 'Save', exact: true }).click()
+      await panel.getByRole('button', { name: 'Save', exact: true }).waitFor({ state: 'detached' })
+      expect(store.get('task.instructions', '~')).toBe('')
+      await panel.getByRole('button', { name: 'Reset to private rules', exact: true }).click()
+      await panel.getByRole('button', { name: 'Reset to private rules', exact: true }).waitFor({ state: 'detached' })
+      expect(await task.inputValue()).toBe('Everywhere rule.')
+      expect(await panel.textContent()).toContain('When rules take effect')
+    } finally {
+      store.set('task.instructions', null, { space: '~' })
+      store.set('task.instructions', null)
+      world.sections = before
+      world.emit('snapshot')
+      await page.close()
+    }
+  }, 30_000)
+})

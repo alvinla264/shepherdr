@@ -603,3 +603,39 @@ describe('a task whose agent started but whose private routing failed', () => {
     expect(w.engine.view(t)).toMatchObject({ status: 'done', outcome: 'done' })
   })
 })
+
+describe('private instructions at a task’s start', () => {
+  test('the launch carries its role’s rules, never the brief or the repository, and only a restart takes a change', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const dir = repo()
+    writeFileSync(join(dir, 'AGENTS.md'), 'Team rules stay as they are.\n')
+    sh('git add AGENTS.md && git commit -qm team', dir)
+    const space = 'private-rules'
+    for (const role of ['coordinator', 'task', 'reviewer']) w.settings.set(`${role}.instructions`, `PRIVATE ${role} marker`, { space })
+    try {
+      const { t } = await started(w, dir, space)
+      const launch = w.started.at(-1)!
+      // its own rules and the reviewer snapshot it hands on; never the coordinator's
+      expect(launch.system).toContain('PRIVATE task marker')
+      expect(launch.system).toContain('PRIVATE reviewer marker')
+      expect(launch.system).not.toContain('PRIVATE coordinator marker')
+      // personal rules stay out of the brief, the repo and the worktree
+      expect(t.desc).not.toContain('PRIVATE')
+      expect(launch.first).not.toContain('PRIVATE')
+      expect(sh('cat AGENTS.md', t.worktree!)).toBe('Team rules stay as they are.')
+      expect(sh('git status --porcelain', t.worktree!)).toBe('')
+      // saving leaves the running agent exactly as it started
+      const was = launch.system
+      w.settings.set('task.instructions', '', { space })
+      expect(w.started.length).toBe(1)
+      expect(w.started.at(-1)!.system).toBe(was)
+      // a restart starts on the snapshot as it is now: the task agent's blank, the reviewer's unchanged
+      await w.engine.restart(t.id, { kind: 'codex' })
+      expect(w.started.at(-1)!.system).toContain(`Private instructions for task (from space ${space}):\n(none)`)
+      expect(w.started.at(-1)!.system).toContain('PRIVATE reviewer marker')
+    } finally {
+      for (const role of ['coordinator', 'task', 'reviewer']) w.settings.set(`${role}.instructions`, null, { space })
+    }
+  })
+})

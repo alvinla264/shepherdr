@@ -2289,3 +2289,21 @@ describe('task IDs set in a space’s Settings', () => {
     expect(await set(placeId.space(two.name), 'ONCE')).toMatchObject({ ok: false })
   })
 })
+
+describe('private instructions from the command', () => {
+  test('an explicitly empty value is a choice of none, and unsetting the machine’s own inherits Everywhere’s again', async () => {
+    try {
+      expect((await src.cli(['set', 'task.instructions', 'Everywhere rule.'], {})).code).toBe(0)
+      const blank = await src.cli(['set', 'task.instructions', '', '--machine'], {})
+      expect(blank.code).toBe(0)
+      expect(blank.out).toContain('running agents are unchanged')
+      expect(src.settings.get('task.instructions')).toBe('')
+      expect(src.settings.pick('task.instructions').from).toBe('machine')
+      expect((await src.cli(['unset', 'task.instructions', '--machine'], {})).code).toBe(0)
+      expect(src.settings.get('task.instructions')).toBe('Everywhere rule.')
+    } finally {
+      src.settings.set('task.instructions', null, 'machine')
+      src.settings.set('task.instructions', null)
+    }
+  })
+})
