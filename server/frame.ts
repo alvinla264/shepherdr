@@ -1,6 +1,7 @@
 // Wraps an artifact's page for a sealed frame: Shepherdr's colours for light and dark, a size reporter, its data, the
 // Send bridge (a form's Send becomes one line typed into its keeper's terminal) and Mark up. The response carries a
 // sandbox CSP, so the page never runs with Shepherdr's origin, even opened directly, and loads nothing at all.
+import { SEALED } from '../shared/sealed.ts'
 import { CHECK_PROBE } from './live/artifacts.ts'
 
 /** Shepherdr's dark colours: by the device's own mode, or the appearance the app has (the shepherdr-dark or -light
@@ -151,7 +152,7 @@ const BRIDGE = `
 `
 
 /** the frame's whole policy: its own inline code and styles, pictures as data, and nothing from anywhere else */
-export const SEALED = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data: 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'`
+export { SEALED }
 
 /** JSON inside a script tag: no "</script>" can end it early */
 const inScript = (v: unknown) => JSON.stringify(v ?? null).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
