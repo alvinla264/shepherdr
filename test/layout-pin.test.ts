@@ -23,10 +23,10 @@ describe.skipIf(!browser)('the lists’ chips', () => {
     const page = await browser!.newPage({ viewport: { width: 1600, height: 900 } })
     await page.goto(at('place=vm-str/home'))
     const list = page.getByRole('region', { name: 'Tasks' })
-    // the main home space lists its own tasks, as any space: none in the demo
-    await list.getByText('No tasks yet. Ask home to add one.').waitFor()
-    expect(await chips(page)).toEqual(['p:vm-str:~'])
-    await page.getByRole('button', { name: /^gtm\b/ }).click()
+    // a fresh host Home starts on what needs you across machines, with no chip to remove
+    await list.getByText('Actionable · all machines', { exact: true }).waitFor()
+    expect(await chips(page)).toEqual([])
+    await page.locator('#places li[data-project="p:vm-str:gtm"]').getByRole('button', { name: /^gtm/ }).click()
     const gtm16 = list.getByRole('button', { name: /GTM-16 Docs/ })
     const lv3 = list.getByRole('button', { name: /LV-3 Upload page/ })
     await gtm16.waitFor()
@@ -123,8 +123,9 @@ describe.skipIf(!browser)('the lists’ chips', () => {
     // unpinned, they follow the space picked again, and a task opens over the list as before
     await list.getByRole('button', { name: 'Locked: unlock filters to follow the space picked' }).click()
     await list.getByRole('button', { name: 'Lock filters: keep them when switching spaces' }).waitFor()
-    await lv3.waitFor({ state: 'detached' })
-    await page.getByRole('button', { name: /^gtm\b/ }).click()
+    // home follows again as its own attention view, which still lists what needs you elsewhere
+    expect(await chips(page)).toEqual([])
+    await page.locator('#places li[data-project="p:vm-str:gtm"]').getByRole('button', { name: /^gtm/ }).click()
     expect(await chips(page)).toEqual(['p:vm-str:gtm'])
     await list.getByRole('button', { name: /GTM-16 Docs/ }).click()
     await page.getByRole('textbox', { name: 'Message GTM-16…' }).waitFor()
@@ -179,8 +180,9 @@ describe.skipIf(!browser)('the lists’ chips', () => {
     expect(await chips(page)).toEqual(['p:vm-str:gtm', 'm:mac', 'p:vm-str:herdr-projects', 'm:nas'])
     // unpinned, the tab shows the space picked
     await page.getByRole('button', { name: 'Locked: unlock filters to follow the space picked' }).click()
-    await page.getByRole('button', { name: /LV-3 Upload page/ }).waitFor({ state: 'detached' })
-    expect(await chips(page)).toEqual(['p:vm-str:~'])
+    // home's own attention view has no chip and still lists the ready task
+    expect(await chips(page)).toEqual([])
+    await page.getByRole('button', { name: /LV-3 Upload page/ }).waitFor()
     await page.close()
   }, 30_000)
 })

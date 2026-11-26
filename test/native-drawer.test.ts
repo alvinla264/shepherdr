@@ -27,7 +27,7 @@ describe.skipIf(!browser)('swipes (phone)', () => {
   }, 30_000)
 
   test('the drawer stays under the finger, even as a thumb arcs up from the edge', async () => {
-    const { ctx, page, drag } = await phone()
+    const { ctx, page, drag } = await phone({ height: 400 })
     // a chat long enough to scroll: a finger drifting up would scroll it, and the browser would take the swipe away
     await page.goto(at(GTM))
     await page.waitForSelector('[data-msg]')
@@ -37,7 +37,7 @@ describe.skipIf(!browser)('swipes (phone)', () => {
     await list.evaluate((n) => (n.scrollTop = n.scrollHeight / 2))
     const top = await scrolls()
     // from 6px in, up a little more than rightwards (about 50° off): the browser would take it as a scroll
-    const pts = Array.from({ length: 27 }, (_, i) => [6 + i * 8, 640 - i * 9] as [number, number])
+    const pts = Array.from({ length: 27 }, (_, i) => [6 + i * 8, 350 - i * 9] as [number, number])
     const { at: right, up } = await drag(pts)
     // its edge has moved as far as the finger, from the first step on, and the chat under it stayed put
     right.forEach((r, i) => expect(Math.abs(r - (pts[i + 1][0] - 6))).toBeLessThan(2))
