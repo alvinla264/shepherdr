@@ -1,5 +1,5 @@
-// What needs you across machines: Home's default actionable list, its summary in a coordinator chat, and the one-line
-// machine health, in a real browser (layout.ts).
+// What needs you across machines: Home's default actionable list, the requests and questions a chat keeps, and the
+// one-line machine health, in a real browser (layout.ts). A chat never summarises them again as a strip of its own.
 import { describe, expect, test } from 'bun:test'
 import { layout, settled } from './layout.ts'
 
@@ -32,17 +32,17 @@ describe.skipIf(!browser)('Home attention', () => {
     await page.close()
   })
 
-  test('a filtered panel leaves a chat summary of original requests, and machine health says the worst in words', async () => {
+  test('a chat keeps no summary of its own, whatever the panel filters; machine health says the worst in words', async () => {
     const page = await browser!.newPage({ viewport: { width: 820, height: 1180 } })
     await page.goto(`http://127.0.0.1:${server!.port}/?place=p:mac:~`)
     const panel = page.locator('section[aria-label="Tasks"]')
     await panel.getByText('LV-3', { exact: true }).waitFor()
-    // the panel already shows everything the chat would summarise: no repeated summary
+    // the old attention strip and its dropdown are gone, not replaced
     expect(await page.locator('[data-attention]').count()).toBe(0)
-    // a filter hides one request from the panel, so the summary names it
+    // nor does filtering the panel bring an aggregate back into the chat
     await panel.getByRole('searchbox', { name: 'Filter tasks' }).fill('LV-3')
-    await page.locator('[data-attention] summary').click()
-    expect(await page.locator('[data-attention]').textContent()).toContain('LV-4')
+    expect(await page.locator('[data-attention]').count()).toBe(0)
+    expect(await page.getByText(/\d+ need you · \d+ ready/).count()).toBe(0)
     // health is one short status in the header; its details keep every reading
     await page.getByRole('button', { name: /^Machine health/ }).click()
     const health = page.getByRole('dialog', { name: 'mac health' })
@@ -51,10 +51,11 @@ describe.skipIf(!browser)('Home attention', () => {
     expect(await health.textContent()).toContain('18%')
     await page.keyboard.press('Escape')
     await settled(page)
-    // a coordinator chat counts its own tasks and question once, and Ready apart
+    // a coordinator chat still shows its question card and each task update, and never a summary
     await page.goto(`http://127.0.0.1:${server!.port}/?place=p:vm-str:gtm`)
     await page.getByText('Rerun CI on main?', { exact: true }).waitFor()
-    expect(await page.locator('[data-attention] summary').textContent()).toContain('3 need you · 1 ready')
+    expect(await page.locator('[data-attention]').count()).toBe(0)
+    expect(await page.getByText(/3 need you · 1 ready/).count()).toBe(0)
     await page.close()
   })
 })
