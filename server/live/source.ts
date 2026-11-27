@@ -233,7 +233,7 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     this.agents.menuUp = (key) => this.menuAnswers.has(key) || !!this.chats.menu(key)
     // a message met a pane that no longer holds its agent: nothing was typed (agents.ts); the chat says so once, and
     // the agent it was for is started again, a few tries at most
-    this.agents.missing = (key, state) => this.missingAgent(key, state)
+    this.agents.missing = (key, state, program) => this.missingAgent(key, state, program)
     this.engine.on('card', (t, status, sub) => this.onCard(t, status, sub))
     // a task's question shows on its needs-you card in its space's chat too: the card follows it
     this.on('chat', (key) => {
@@ -1334,16 +1334,18 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
    *  plain words, and the agent is started again now (a few tries at most, revive.ts): what waits goes in once it is
    *  back, with the first message a launch brings. Another program in the terminal is the human's own: it is left
    *  alone, and the message that was refused says which one holds it. */
-  private missingAgent(key: string, state: PaneState | 'unknown') {
-    if (state === 'other' || state === 'unknown') return
+  private missingAgent(key: string, state: PaneState | 'unknown', program?: string) {
+    if (state === 'unknown') return
     // one starting or stopping right now is not started again: what waits goes in once herdr says it is ready
     if (this.agents.busy(key)) return
     const now = Date.now()
     if (now - (this.missingAt.get(key) ?? 0) > 300_000) {
       this.missingAt.set(key, now)
-      const text = key.includes('/')
-        ? 'Its agent isn’t running, so nothing was typed. What was sent waits, and goes in first once it is back.'
-        : 'Its agent isn’t running, so nothing was typed. Starting it again; what was sent waits for it.'
+      const text = state === 'other'
+        ? `Its terminal is running ${program ?? 'another program'}, not the agent, so nothing was sent. Stop it and try again.`
+        : key.includes('/')
+          ? 'Its agent isn’t running, so nothing was typed. What was sent waits, and goes in first once it is back.'
+          : 'Its agent isn’t running, so nothing was typed. Starting it again; what was sent waits for it.'
       const id = `missing:${key}:${now}`
       this.chats.post(key, { id, card: { id, text } })
       if (this.watched.includes(key)) this.emit('chat', key)
@@ -2079,6 +2081,8 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
   }
 
   private menuAnswers = new Set<string>()
+  /** answers to a CLI's own question being typed now, by question id: a second tap is refused */
+  private answering = new Set<string>()
 
   private async answer(a: Extract<Action, { type: 'answer' }>) {
     const key = a.chat
@@ -2145,30 +2149,37 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     const open = this.chats.openQuestion(key)
     // only the question still asked, and only a part of it not answered yet: an old alert's button can't answer the next
     if (open && (qid === open.id || qid.startsWith(`${open.id}:`)) && this.chats.log(key).answers[qid] === undefined) {
+      // a second tap (the app and an alert's button) waits for this one to be checked and counted
+      if (this.answering.has(qid)) return { ok: false, error: 'Your answer is still being checked.' }
       const idx = qid === open.id ? undefined : qid.slice(open.id.length + 1)
       const item = open.items[Number(idx ?? 0)]
-      // the question is only on that CLI's screen: if its pane no longer holds the agent there is nothing to answer,
-      // and the card stays answerable rather than being marked answered with nothing typed for it
-      const pane = await this.agents.paneOf(key)
-      if (pane?.state !== 'agent') {
-        this.missingAgent(key, pane?.state ?? 'gone')
-        return { ok: false, error: missingWords(key, pane?.state ?? 'gone', pane?.program) }
-      }
-      // noted before the keys go in: a second tap meanwhile (the app and an alert's button) is refused
-      this.chats.answer(key, qid, a.choice, a.other, space)
       const keys: string[] = []
       if (a.other) keys.push(String((item?.options.length ?? 0) + 1))
       else if (item?.multiSelect) {
         for (const c of a.choices ?? [a.choice]) keys.push(String(c + 1))
         keys.push('enter')
       } else keys.push(String(a.choice + 1))
-      await this.agents.keys(key, keys)
-      if (a.other) {
-        // words meant for the agent: held for its next run when its pane no longer holds it, never typed into another
-        if ((await this.agents.text(key, a.other, 'hold')) === 'typed') await this.agents.keys(key, ['enter'])
+      this.answering.add(qid)
+      try {
+        // the question is only on that CLI's screen: if its pane no longer holds the agent there is nothing to answer,
+        // and the card stays answerable rather than being marked answered with nothing typed for it
+        const pane = await this.agents.paneOf(key)
+        if (pane?.state !== 'agent') {
+          this.missingAgent(key, pane?.state ?? 'gone', pane?.program)
+          return { ok: false, error: missingWords(key, pane?.state ?? 'gone', pane?.program) }
+        }
+        await this.agents.keys(key, keys)
+        if (a.other) {
+          // words meant for the agent: held for its next run when its pane no longer holds it, never typed into another
+          if ((await this.agents.text(key, a.other, 'hold')) === 'typed') await this.agents.keys(key, ['enter'])
+        }
+        // the last question of a form: the CLI asks to submit
+        if (Number(idx ?? 0) >= open.items.length - 1 && open.items.length > 1) setTimeout(() => void this.agents.keys(key, ['enter']).catch(() => undefined), 600)
+      } finally {
+        this.answering.delete(qid)
       }
-      // the last question of a form: the CLI asks to submit
-      if (Number(idx ?? 0) >= open.items.length - 1 && open.items.length > 1) setTimeout(() => void this.agents.keys(key, ['enter']).catch(() => undefined), 600)
+      // noted once it is in: a tap meanwhile was refused, and one whose pane lost the agent is still answerable
+      this.chats.answer(key, qid, a.choice, a.other, space)
       const label = a.other || (a.choices ?? [a.choice]).map((i) => item?.options[i]?.label).filter(Boolean).join(', ')
       this.chats.post(key, { id: `cli-answer:${qid}`, who: 'you', answered: `Answered “${item?.question ?? ''}”`, elsewhere: space ? this.chats.answeredIn(space) : undefined, text: label })
       if (space) this.answeredHere(space, key, item?.question ?? '', label)

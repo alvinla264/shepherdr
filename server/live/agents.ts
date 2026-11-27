@@ -352,7 +352,7 @@ export class Agents extends Emitter<Events> {
     keys: (pane_id, keys) => herdr.paneKeys(pane_id, keys),
   }
   /** its pane no longer holds its agent, so nothing was typed: the source starts it again, once, and tells the chat */
-  missing?: (key: string, state: PaneState | 'unknown') => void
+  missing?: (key: string, state: PaneState | 'unknown', program?: string) => void
 
   constructor() {
     super()
@@ -669,7 +669,7 @@ export class Agents extends Emitter<Events> {
   /** what a screen sent that waits for this agent fails: the screen says why and offers Retry. `all`: nothing can go
    *  into its pane (another program holds it), so nothing it holds waits any longer */
   private fail(key: string, error: string, all = false) {
-    const mine = this.outbox.filter((o) => o.key === key && (all || (o.cid && !o.cid.startsWith('requested-news:'))))
+    const mine = this.outbox.filter((o) => o.key === key && (o.awaitsAgent ? all : all || (o.cid && !o.cid.startsWith('requested-news:'))))
     if (!mine.length) return
     const now = Date.now()
     this.outbox = this.outbox.filter((o) => !mine.includes(o))
@@ -1266,7 +1266,7 @@ export class Agents extends Emitter<Events> {
     if (pane?.state === 'agent') return pane.pane_id
     const state = pane?.state ?? 'gone'
     // the words were meant for an agent: the source starts it again (a few tries at most) and says so in the chat
-    this.missing?.(key, state)
+    this.missing?.(key, state, pane?.program)
     throw new PaneMissing(state, missingWords(key, state, pane?.program))
   }
 
@@ -1287,7 +1287,7 @@ export class Agents extends Emitter<Events> {
       return 'typed'
     }
     const state = pane?.state ?? 'gone'
-    this.missing?.(key, state)
+    this.missing?.(key, state, pane?.program)
     // words wait for the agent that starts next; another program in the pane is the human's own, and is left alone
     if (when === 'hold' && (state === 'shell' || state === 'gone')) {
       this.hold(key, text)

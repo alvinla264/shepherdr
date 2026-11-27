@@ -850,11 +850,15 @@ describe('what you send shows at once', () => {
     const agents = src.agents
     const kind = agents.records[chat]?.kind ?? 'claude'
     const info = agents.panes.info
+    // there is no herdr here to read a menu off: these tests are about typing, and beforeInput reads one first
+    const readMenu = src.chats.readMenu
+    src.chats.readMenu = async () => false
     agents.live.set(name, { agent: kind, agent_status: 'idle', cwd: '/x', name, pane_id: `pane-${name}`, tab_id: 't', workspace_id: 'w' })
     agents.panes.info = async () => ({ shell_pid: 1, foreground_process_group_id: 2, foreground_processes: [{ pid: 2, name: kind, argv: [kind] }] })
     return () => {
       agents.live.delete(name)
       agents.panes.info = info
+      src.chats.readMenu = readMenu
     }
   }
   test("an agent that won't start, or won't take it, is an error the screen shows, not a wait", async () => {
@@ -1096,9 +1100,10 @@ describe('what you send shows at once', () => {
       expect(mine()).toHaveLength(1)
       expect(agents.holdOf(chat)).toBe('start')
       expect(src.chats.chat(chat).failed?.some((f) => f.cid === 'first')).toBeFalsy()
-      // the agent is up: it goes in, once (news for this coordinator may go in too)
+      // the agent is up: it goes in, once (news for this coordinator may go in too). A try may already be on its way
       ready = true
       await agents.deliver(chat)
+      await until(() => typed.filter((x) => x === 'Hello there').length === 1)
       expect(typed.filter((x) => x === 'Hello there')).toHaveLength(1)
       expect(mine()).toHaveLength(0)
       expect(agents.holdOf(chat)).toBeUndefined()
