@@ -12,7 +12,7 @@ or a Nix store path named in full, a `PATH=` of the command's own, or anything a
 ## Where it is
 
 `bin/guard/`: five names, `systemctl`, `pkill`, `killall`, `herdr`, `shepherdr`, each a link to `.guard`, one POSIX
-`sh` script. It runs no Python, hardcodes no store path, and forks nothing before the command it passes to.
+`sh` script. It runs no Python, hardcodes no store path, and runs no external helper before the command it passes to.
 
 `agentEnv` (`server/live/box.ts`) puts it first for every agent Shepherdr launches — coordinator, task agent, the
 reviewers they start, here and on another machine (the helper copies the five files there, `install.ts`) — and sets
@@ -34,8 +34,8 @@ One plain line, exit 1, nothing run:
 
 | command | refused when |
 | --- | --- |
-| `systemctl` | `stop`, `restart`, `try-restart`, `reload-or-restart`, `kill`, `mask` or `isolate` of a unit named `*herdr*` (so `herdr.service`, `herdr-core`, `shepherdr.service`), `hc-*` (herdr-core's holders), or of `--all`, `default.target`, `multi-user.target`, `graphical.target`, `rescue.target`, `emergency.target`, or a unit glob (`*`, `?`, `[`); `disable --now` of those units |
-| `pkill`, `killall` | any name or pattern it is given: a bare name that is the live server or herdr (`bun`, `node`, `perl`, `sh`, `bash`, `dash`, `zsh`, `systemd`, `systemctl`, `herdr`, `herdr-core`, `shepherdr`, `hc-*`); a full-line/regex pattern (`-f`, `-r`) mentioning `herdr`, `shepherdr`, `server/main`, `main.ts`, `cli.ts`, `supervise.ts`, `plugin.ts`, `bun`, `node` or `perl`; a pattern of nothing but wildcards (`pkill -f .`, `killall -r '.*'`) |
+| `systemctl` | `stop`, `restart`, `try-restart`, `condrestart`, `force-reload`, `reload-or-restart`, `reload-or-try-restart`, `try-reload-or-restart`, `kill`, `mask` or `isolate` of a unit named `*herdr*` (so `herdr.service`, `herdr-core`, `shepherdr.service`), `hc-*` (herdr-core's holders), or of `--all`, `default.target`, `multi-user.target`, `graphical.target`, `rescue.target`, `emergency.target`, or a unit glob (`*`, `?`, `[`); `disable --now` of those units |
+| `pkill`, `killall` | any name or pattern it is given: a bare name that is the live server or herdr (`bun`, `node`, `perl`, `sh`, `bash`, `dash`, `zsh`, `systemd`, `systemctl`, `herdr`, `herdr-core`, `shepherdr`, `hc-*`); a pattern (`pkill`'s patterns are regexes; `-f`, `-r` or a cluster like `-9f`) mentioning `herdr`, `shepherdr`, `server/main`, `main.ts`, `cli.ts`, `supervise.ts`, `plugin.ts`, `bun`, `node` or `perl`; a pattern of nothing but wildcards (`pkill -f .`, `killall -r '.*'`); `-u`/`--user` with no name at all (`killall -u alvin`, every process of that user) |
 | `herdr` | `start`, `stop`, `restart`; `update`; `server stop`; `session stop` or `session delete`, after any `--session`/`--machine`/`--remote` |
 | `shepherdr` | `install`, `update`, `uninstall`, `migrate`, `web`, `secrets`; `secret set`, `secret rm`, `secret elevenlabs` — after any leading `--url`, `--space`, `--machine` or `--home` |
 
@@ -62,7 +62,7 @@ than a wrapper that runs itself.
 - `kill -9 <pid>` with a number, `kill $(pgrep …)` (pgrep is not guarded), or the same command by its full store path.
 - Clearing PATH, `env PATH=…`, or a subprocess started before the guard was on PATH.
 - Host root, systemd itself, and anything the human runs outside an agent.
-- A pattern the guard's simple globbing reads differently from the tool's own regex.
+- A regex the guard reads as plain text: `pkill 'herd[r]'` passes, because the guard matches the words it knows in what it is given.
 
 ## Changing it
 

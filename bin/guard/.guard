@@ -11,8 +11,8 @@
 # It is a seatbelt, not a boundary: a shell can still `kill -9 <pid>`, run a command by its full store path, or clear
 # PATH. Docs/guard.md says what it does and does not cover.
 #
-# No Python, no hardcoded store paths, and no process of its own before the command: sh builtins, a subshell to find
-# the real command, then exec.
+# No Python, no hardcoded store paths, and no external helper before the command: sh builtins, a subshell to find the
+# real command, then exec.
 
 # guard_verdict COMMAND [ARGUMENT ...]: pure. Given a command and its arguments it sets guard_reason and returns 1 when
 # the invocation would take the live session down, 0 otherwise. It runs nothing and reads nothing.
@@ -36,7 +36,7 @@ guard_systemctl() {
   guard_now=
   for guard_arg in "$@"; do
     case $guard_arg in
-      stop | restart | try-restart | reload-or-restart | kill | mask | isolate)
+      stop | restart | try-restart | condrestart | force-reload | reload-or-restart | reload-or-try-restart | try-reload-or-restart | kill | mask | isolate)
         [ -n "$guard_verb" ] || guard_verb=$guard_arg
         ;;
       --all)
@@ -67,19 +67,42 @@ guard_systemctl() {
 guard_kill() {
   guard_kind=$1
   shift
-  guard_full=
+  guard_names=
+  guard_user=
+  guard_value=
+  # options first: which of the words are names or patterns, and whether one of them is a whole user's processes
   for guard_arg in "$@"; do
+    if [ -n "$guard_value" ]; then
+      guard_value=
+      continue
+    fi
     case $guard_arg in
-      -f | --full | -r | --regexp) guard_full=1 ;;
-    esac
-  done
-  # every name or pattern it is given: killall takes several, and a pkill option's value is not one
-  for guard_arg in "$@"; do
-    case $guard_arg in
+      -u | --user | -U) guard_user=1; guard_value=option ;;
+      -u?* | -[!-]*u?*) guard_user=1 ;;
+      --user=*) guard_user=1 ;;
+      -P | --parent | -s | --signal | -t | --terminal | -G | --pgroup | -F | --pidfile | -Z | --context) guard_value=option ;;
+      --*=*) : ;;
       -*) : ;;
-      *) guard_kill_one "$guard_kind" "$guard_arg" || return 1 ;;
     esac
   done
+  # then every name or pattern it is given (killall takes several): one that reaches the live session refuses the lot
+  guard_value=
+  for guard_arg in "$@"; do
+    if [ -n "$guard_value" ]; then
+      guard_value=
+      continue
+    fi
+    case $guard_arg in
+      -u | --user | -U | -P | --parent | -s | --signal | -t | --terminal | -G | --pgroup | -F | --pidfile | -Z | --context) guard_value=option ;;
+      -* | --*=* | -u?* | -[!-]*u?*) : ;;
+      *) guard_names=1; guard_kill_one "$guard_kind" "$guard_arg" || return 1 ;;
+    esac
+  done
+  # killall -u alvin with no name kills every process that user has, the live server among them
+  if [ -n "$guard_user" ] && [ -z "$guard_names" ]; then
+    guard_reason="would $guard_kind every process of a user, the live server among them"
+    return 1
+  fi
   return 0
 }
 
@@ -95,23 +118,20 @@ guard_kill_one() {
       return 1
       ;;
   esac
-  if [ -n "$guard_full" ]; then
-    # a full command line (or killall's regex): any word that runs, or lies next to, the live session
-    case $guard_pattern in
-      *herdr* | *Herdr* | *HERDR* | *shepherdr* | *server/main* | *main.ts* | *cli.ts* | *supervise.ts* | *plugin.ts* | *bun* | *node* | *perl*)
-        guard_reason="would $guard_kind processes by '$guard_pattern', which can reach the live session (use a narrower pattern)"
-        return 1
-        ;;
-    esac
-  else
-    # a bare name, matched against the process names that are the live session
-    case $guard_pattern in
-      bun | node | perl | sh | bash | dash | zsh | systemd | systemctl | herdr | herdr-core | shepherdr | hc-*)
-        guard_reason="would $guard_kind processes by '$guard_pattern', which is the live server or herdr"
-        return 1
-        ;;
-    esac
-  fi
+  # pkill's pattern is a regular expression and killall -r's too: a word that runs, or lies next to, the live session
+  case $guard_pattern in
+    *herdr* | *Herdr* | *HERDR* | *shepherdr* | *server/main* | *main.ts* | *cli.ts* | *supervise.ts* | *plugin.ts* | *bun* | *node* | *perl*)
+      guard_reason="would $guard_kind processes by '$guard_pattern', which can reach the live session (use a narrower pattern)"
+      return 1
+      ;;
+  esac
+  # and a bare name that is the live server or herdr
+  case $guard_pattern in
+    bun | node | perl | sh | bash | dash | zsh | systemd | systemctl | herdr | herdr-core | shepherdr | hc-*)
+      guard_reason="would $guard_kind processes by '$guard_pattern', which is the live server or herdr"
+      return 1
+      ;;
+  esac
   return 0
 }
 
@@ -197,10 +217,21 @@ guard_real() {
   printf '%s' "$guard_found"
 }
 
+# one plain line, even when an argument carries a newline of its own (sh alone: no tr to miss on a bare PATH)
+guard_refuse() {
+  guard_line=
+  while IFS= read -r guard_part; do
+    guard_line=${guard_line:+$guard_line }$guard_part
+  done <<EOF
+guard: ${SHEPHERDR_CHAT:-an agent} refused: $guard_verdict_cmd $* $guard_reason. The human can run it; ask them.
+EOF
+  printf '%s\n' "$guard_line" >&2
+}
+
 guard_main() {
   guard_self=$0
   guard_verdict "${guard_self##*/}" "$@" || {
-    printf '%s\n' "guard: ${SHEPHERDR_CHAT:-an agent} refused: $guard_verdict_cmd $* $guard_reason. The human can run it; ask them." >&2
+    guard_refuse "$@"
     exit 1
   }
   guard_found=$(guard_real "$guard_verdict_cmd" "$guard_self") || {

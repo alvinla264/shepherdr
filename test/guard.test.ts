@@ -37,6 +37,8 @@ const ALLOWED: [string, string[]][] = [
   ['herdr', ['session', 'list']],
   ['herdr', ['--session', 'work', 'pane', 'list']],
   ['pkill', ['-u', 'alvin', 'sleep']],
+  ['pkill', ['-P', '123', 'sleep']],
+  ['killall', ['-u', 'alvin', 'chrome']],
   ['shepherdr', ['--url', 'http://127.0.0.1:7791', 'task', 'list']],
   ['shepherdr', ['task', 'list']],
   ['shepherdr', ['restart', 'SHE-12']],
@@ -57,6 +59,8 @@ const REFUSED: [string, string[]][] = [
   ['systemctl', ['--user', 'disable', '--now', 'herdr.service']],
   ['systemctl', ['--user', 'stop', '*']],
   ['systemctl', ['--user', 'restart', 'herdr.se*']],
+  ['systemctl', ['--user', 'condrestart', 'herdr-core.service']],
+  ['systemctl', ['--user', 'force-reload', 'shepherdr.service']],
   ['pkill', ['bun']],
   ['pkill', ['-9', '-f', 'herdr']],
   ['pkill', ['-f', 'bun server/main.ts']],
@@ -66,6 +70,11 @@ const REFUSED: [string, string[]][] = [
   ['killall', ['herdr']],
   ['killall', ['bun', 'sleep']],
   ['pkill', ['-f', 'herdr', '-u', 'alvin']],
+  ['pkill', ['-9f', 'server/main.ts']],
+  ['pkill', ['herdr.*']],
+  ['pkill', ['-u', 'alvin']],
+  ['killall', ['-u', 'alvin']],
+  ['killall', ['--user', 'alvin']],
   ['herdr', ['server', 'stop']],
   ['herdr', ['--session', 'live', 'server', 'stop']],
   ['herdr', ['session', 'stop', 'work']],
@@ -113,7 +122,7 @@ function stubs() {
   const calls = join(dir, 'calls')
   mkdirSync(real)
   for (const command of GUARD_COMMANDS) {
-    writeFileSync(join(real, command), `#!/bin/sh\nprintf '%s\\n' "called $*" >> ${JSON.stringify(calls)}\nprintf 'path %s\\n' "$PATH" >> ${JSON.stringify(calls)}\n`, { mode: 0o755 })
+    writeFileSync(join(real, command), `#!/bin/sh\nprintf 'called\\n' >> ${JSON.stringify(calls)}\nfor a in "$@"; do printf 'arg [%s]\\n' "$a" >> ${JSON.stringify(calls)}; done\nprintf 'path [%s]\\n' "$PATH" >> ${JSON.stringify(calls)}\n`, { mode: 0o755 })
     chmodSync(join(real, command), 0o755)
   }
   const env = { HOME: dir, PATH: `${guard}:${real}:/usr/bin:/bin`, SHEPHERDR_GUARD_PATH: `${real}:/usr/bin:/bin`, SHEPHERDR_CHAT: 'SHE-21/Agent' }
@@ -142,8 +151,9 @@ describe('the guard wrappers', () => {
       if (!(GUARD_COMMANDS as readonly string[]).includes(command)) continue
       const r = spawnSync(join(guard, command), args, { env: s.env, encoding: 'utf8' })
       expect([command, ...args, r.status]).toEqual([command, ...args, 0])
-      expect(s.called()).toContain(`called ${args.join(' ')}\n`)
-      expect(s.called()).toContain(`path ${guard}:${s.real}:/usr/bin:/bin\n`)
+      // each argument as it was, boundaries and all
+      expect(s.called()).toContain(`called\n${args.map((a) => `arg [${a}]\n`).join('')}`)
+      expect(s.called()).toContain(`path [${guard}:${s.real}:/usr/bin:/bin]\n`)
     }
   })
 
@@ -155,7 +165,7 @@ describe('the guard wrappers', () => {
     expect(refused.stderr).toContain('SHE-21/Agent refused')
     expect(s.called()).toBe('')
     expect(spawnSync('sh', ['-c', 'herdr status'], { env: s.env, encoding: 'utf8' }).status).toBe(0)
-    expect(s.called()).toContain('called status\n')
+    expect(s.called()).toContain('called\narg [status]\n')
   })
 
   test('without the PATH it guards it runs nothing rather than itself', () => {
