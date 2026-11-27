@@ -21,7 +21,7 @@ import { Agents, hidden, type Spec } from './agents.ts'
 import { herdr } from './herdr.ts'
 import { followCommand, isCommand } from './commands.ts'
 import { effortsOf, findModel, knowsModels, modelsOf, nearest } from './models.ts'
-import { HELP, one, parseArgs, summaryOpts, type Parsed } from './args.ts'
+import { askQuestions, HELP, one, parseArgs, summaryOpts, type Parsed } from './args.ts'
 import { Automations, type Automation, type Template } from './automations.ts'
 import { Heartbeats, heartbeatFile } from './heartbeat.ts'
 import { eventRules, eventsText, eventWords, matches, nextWords, runWords, timeRule, timeWords, triggerWords, type Happened, type TriggerEvent } from './trigger.ts'
@@ -2043,6 +2043,30 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
 
   private menuAnswers = new Set<string>()
 
+  /** each question of a card that asked several, answered on it: its answer kept on the part, and the line it goes to the
+   *  agent on (with its question, under the card's title). Every question is required unless the card said it is optional */
+  private answerParts(q: Question, a: Extract<Action, { type: 'answer' }>): { lines: string[]; summary: string } | { error: string } {
+    const answers = a.parts ?? []
+    const lines: string[] = []
+    const said: string[] = []
+    const kept: { i: number; sent?: number; picks?: number[]; text?: string }[] = []
+    for (const [i, part] of (q.parts ?? []).entries()) {
+      const pick = answers[i] ?? {}
+      const picks = part.multi ? (pick.choices ?? []) : pick.choice !== undefined && pick.choice >= 0 ? [pick.choice] : []
+      const words = pick.other?.trim()
+      if (!picks.length && !words) {
+        if (part.optional) continue
+        return { error: `Answer “${part.title}” before sending: every question on this card is required unless it says optional.` }
+      }
+      const text = words || picks.map((j) => part.choices[j]?.label).filter(Boolean).join(', ')
+      kept.push({ i, sent: words ? -1 : (picks[0] ?? -1), ...(part.multi ? { picks } : {}), text })
+      lines.push(line.answer(this.user, part.title, text, q.title))
+      said.push(`${part.title} → ${text}`)
+    }
+    for (const k of kept) Object.assign(q.parts![k.i], { sent: k.sent, ...(k.picks ? { picks: k.picks } : {}), ...(k.sent === -1 ? { said: k.text } : {}) })
+    return { lines, summary: said.join(' · ') }
+  }
+
   private async answer(a: Extract<Action, { type: 'answer' }>) {
     const key = a.chat
     const qid = a.question
@@ -2095,6 +2119,17 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       const q = posted.question
       // answered already (in the app, by typing, or an old alert's button): never a second answer
       if (q.sent !== undefined || this.chats.log(key).answers[qid] !== undefined) return { ok: false, error: 'This card is answered already.' }
+      // a card asking several questions: each answered on it, all sent at once, each on its own answer line
+      if (q.parts) {
+        const answered = this.answerParts(q, a)
+        if ('error' in answered) return { ok: false, error: answered.error }
+        q.sent = -1
+        this.chats.answer(key, qid, -1, undefined, space)
+        if (space) this.answeredHere(space, key, q.title, answered.summary)
+        await this.send(key, `${answered.lines.join('\n')}${a.note ? `\n${a.note}` : ''}`, [], true)
+        this.emit('snapshot')
+        return { ok: true }
+      }
       const labels = (a.choices ?? [a.choice]).map((i) => q.choices[i]?.label).filter(Boolean)
       const answer = a.other || labels.join(', ')
       q.sent = a.choice
@@ -2413,7 +2448,20 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       case 'ask': {
         if (!ctx.chat) throw new Error('shepherdr ask works from an agent Shepherdr started')
         const title = a1
+        // several questions on one card (--question groups), or the one the title asks
+        const parts = askQuestions(p)
         const labels = p.opts.choice ?? []
+        if (parts) {
+          if (!title) throw new Error('shepherdr ask "<card title>" --question "<one question>" --choice "<label>" --choice "<label>" …')
+          const id = `ask:${randomUUID().slice(0, 8)}`
+          this.chats.post(ctx.chat, {
+            id,
+            question: { id, title, kind: parts.some((x) => x.other) ? 'Question' : 'Form', choices: [], parts, to: this.chatName(ctx.chat) },
+          })
+          this.emit('chat', ctx.chat)
+          this.emit('snapshot')
+          return `Asked ${parts.length} questions on one card. End your turn now; each answer arrives on its own <answer …> line, with its question.`
+        }
         if (!title || labels.length < 2) throw new Error('shepherdr ask "<question>" --choice "<label>" --choice "<label>" …')
         const desc = Object.fromEntries((p.opts.desc ?? []).map((d) => d.split('=').map((s) => s.trim()) as [string, string]))
         const id = `ask:${randomUUID().slice(0, 8)}`

@@ -23,15 +23,20 @@ import { CLI_NAME } from './settings.ts'
 import { replyOnScreen } from './streaming.ts'
 import { activityOf, codexThreadLog, cutOutput, headlessJob, JobLogs, lastLine, lineOf, outputAt, shown as shownStep, tailOf, type JobRec } from './activity.ts'
 
-/** a chat line of yours that shows as words: an answer, a page's Send and words about an artifact under what they
- *  answer, a note with what it is on */
+/** a chat line of yours that shows as words: a page's Send and words about an artifact under what they answer, a secret,
+ *  a note with what it is on (answers are read on their own, one line each, by answersAs) */
 function shownAs(p: Parsed): { title?: string; text: string } | undefined {
-  if (p.kind === 'answer') return { title: `Answered “${p.title}”`, text: p.answer }
   if (p.kind === 'secret') return { title: 'Gave a secret', text: `${p.name}${p.where ? `, for ${p.where}` : ''}` }
   if (p.kind === 'artifact-send') return { title: `Sent from "${p.title}"`, text: p.text }
   if (p.kind === 'artifact-say') return { title: `About "${p.title}"`, text: p.text }
   if (p.kind === 'note') return { text: `[note on ${p.target}] ${p.note}` }
   return undefined
+}
+
+/** your answers in one message: the one answer, or a card that asked several (its title, then each question and answer) */
+function answersAs(answers: { title: string; text: string; card?: string }[]): { title: string; text: string } {
+  if (answers.length === 1) return { title: `Answered “${answers[0].title}”`, text: answers[0].text }
+  return { title: `Answered “${answers[0].card ?? 'your questions'}”`, text: answers.map((x) => `${x.title} → ${x.text}`).join('\n') }
 }
 
 /** a line of yours the agent will answer: words of yours, not Shepherdr's hidden news and not only reactions */
@@ -114,7 +119,9 @@ function withAnswer(q: Question, l: ChatLog, place: (key: string) => Question['e
   const s = l.said?.[q.id]
   const elsewhere = s?.space ? place(s.space) : undefined
   if (sent !== -1) return { ...q, sent, elsewhere }
-  return { ...q, sent, said: s?.text, via: s?.chat || (!s && q.id.startsWith('ask:')) ? 'chat' : undefined, elsewhere }
+  // a card of several questions is answered as a whole, not in words: it is not answered in the chat
+  const via = q.parts ? undefined : s?.chat || (!s && q.id.startsWith('ask:')) ? 'chat' : undefined
+  return { ...q, sent, said: s?.text, via, elsewhere }
 }
 
 const safe = (key: string) => key.replace(/[^a-zA-Z0-9_.-]+/g, '_')
@@ -770,6 +777,7 @@ export class Chats {
         const rest: string[] = []
         let answeredTitle: string | undefined
         let consumed = false
+        const answers: { title: string; text: string; card?: string }[] = []
         for (const ln of lines) {
           const p = parseUserLine(ln)
           if (!p) {
@@ -782,11 +790,17 @@ export class Chats {
             if (a) later.push(() => addRx(artifactPost(a.id, a.v), emoji, 'me', kind === 'react'))
             else addRx(byText(p.to, p.path), p.emoji, 'me', p.kind === 'react')
             consumed = true
-          } else {
+          } else if (p.kind === 'answer') answers.push({ title: p.title, text: p.answer, card: p.card })
+          else {
             const s = shownAs(p)!
             answeredTitle = s.title ?? answeredTitle
             rest.push(s.text)
           }
+        }
+        if (answers.length) {
+          const s = answersAs(answers)
+          answeredTitle = s.title
+          rest.unshift(s.text)
         }
         const body = rest.join('\n').trim()
         if (consumed && !body && !files.length) continue
@@ -902,17 +916,27 @@ export class Chats {
         const r = parseReply(o.text)
         const reply = r ? replyTo(r.to, undefined, r.line, r.artifact) : undefined
         let answered: string | undefined
-        const text = stripHidden(
-          (r ? [...userLines(r.text), ...r.rest] : userLines(o.text))
-            .flatMap((ln) => {
-              const p = parseUserLine(ln)
-              if (p?.kind === 'attach') files.push({ name: p.name, path: p.path })
-              const s = p && shownAs(p)
-              if (s?.title) answered = s.title
-              return p?.kind === 'attach' ? [] : [s ? s.text : ln]
-            })
-            .join('\n'),
-        )
+        const answers: { title: string; text: string; card?: string }[] = []
+        const kept = (r ? [...userLines(r.text), ...r.rest] : userLines(o.text)).flatMap((ln) => {
+          const p = parseUserLine(ln)
+          if (p?.kind === 'attach') {
+            files.push({ name: p.name, path: p.path })
+            return []
+          }
+          if (p?.kind === 'answer') {
+            answers.push({ title: p.title, text: p.answer, card: p.card })
+            return []
+          }
+          const s = p && shownAs(p)
+          if (s?.title) answered = s.title
+          return [s ? s.text : ln]
+        })
+        if (answers.length) {
+          const s = answersAs(answers)
+          answered = s.title
+          kept.unshift(s.text)
+        }
+        const text = stripHidden(kept.join('\n'))
         // what Shepherdr itself sends (instructions, news) never shows as yours
         if (text || answered) msgs.push({ id: o.id, who: 'you', at: o.at, text: text || undefined, answered, waiting: true, waitsFor, cid: o.cid, reply })
         files.forEach((file, i) => msgs.push({ id: `${o.id}:${i}`, who: 'you', at: o.at, file, waiting: true, waitsFor, cid: o.cid, reply: !i && !text ? reply : undefined }))

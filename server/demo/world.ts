@@ -746,6 +746,27 @@ export class DemoWorld extends Emitter<SourceEvents> implements Source {
     const q = msg?.question
     if (!c || !q || q.sent !== undefined) return { ok: false }
     if (q.noteRequiredFor !== undefined && a.choice === q.noteRequiredFor && !a.note) return { ok: false, error: 'A note is needed to send it back.' }
+    // a card of several questions: each answered on it, all sent at once
+    if (q.parts) {
+      const said = q.parts.flatMap((p, i) => {
+        const pick = a.parts?.[i] ?? {}
+        if (pick.other?.trim()) {
+          p.sent = -1
+          p.said = pick.other.trim()
+          return [`${p.title} → ${pick.other.trim()}`]
+        }
+        const picks = pick.choices?.length ? pick.choices : pick.choice !== undefined && pick.choice >= 0 ? [pick.choice] : []
+        if (!picks.length) return p.optional ? [] : [`${p.title} → not answered`]
+        p.sent = picks[0]
+        if (p.multi) p.picks = picks
+        return [`${p.title} → ${picks.map((j) => p.choices[j]?.label).filter(Boolean).join(', ')}`]
+      })
+      q.sent = -1
+      this.push(a.chat, { who: 'you', answered: `Answered “${q.title}”`, text: said.join('\n') + (a.note ? `\n${a.note}` : '') }, { who: 'agent', text: D.REPLIES[q.id] ?? 'Thanks.' })
+      for (const [pl, qid] of Object.entries(this.asks)) if (qid === q.id) delete this.asks[pl]
+      this.emit('snapshot')
+      return { ok: true }
+    }
     q.sent = a.choice
     const label = a.other || q.choices[a.choice]?.label || ''
     if (q.asks) {

@@ -490,6 +490,63 @@ describe('choice cards', () => {
     expect(card?.question).toMatchObject({ sent: -1, said: 'Leave it, I will look later', via: 'chat' })
   })
 
+  test('a card of several questions sends one answer line per question, each with its question; one question is the line it always was', async () => {
+    const chat = placeId.home()
+    const said: string[] = []
+    const send = src.agents.send
+    src.agents.send = (async (_k: string, text: string) => (said.push(text), { waiting: false })) as never
+    try {
+      // one question: exactly the line it was before cards could ask several
+      await src.cli(['ask', 'Rerun CI on main?', '--choice', 'Rerun it', '--choice', 'Leave it'], { chat })
+      const single = src.chats.log(chat).posted.findLast((p) => p.question)!.question!.id
+      await src.act({ type: 'answer', chat, question: single, choice: 0 })
+      expect(said).toEqual([`<answer from="${src.user}" question="Rerun CI on main?">Rerun it</answer>`])
+      said.length = 0
+      // several: the card's title, then each question with its own choices, descriptions and typed answer
+      const r = await src.cli(['ask', 'Release prep', '--question', 'Which branch?', '--choice', 'main', '--choice', 'next', '--desc', 'next=the release branch', '--question', 'Where to?', '--choice', 'Staging', '--choice', 'Production', '--other'], { chat })
+      expect(r.code).toBe(0)
+      const q = src.chats.log(chat).posted.findLast((p) => p.question)!.question!
+      expect(q).toMatchObject({ title: 'Release prep', kind: 'Question', choices: [] })
+      expect(q.parts?.map((p) => p.title)).toEqual(['Which branch?', 'Where to?'])
+      expect(q.parts?.[0].choices).toEqual([{ label: 'main' }, { label: 'next', description: 'the release branch' }])
+      expect(q.parts?.[1]).toMatchObject({ other: true })
+      // a required question left blank: refused, and nothing goes to the agent
+      expect(await src.act({ type: 'answer', chat, question: q.id, choice: -1, parts: [{ choice: 1 }] })).toMatchObject({ ok: false })
+      expect(said).toEqual([])
+      // both, in one Send: one line each, each with its question under the card's title
+      await src.act({ type: 'answer', chat, question: q.id, choice: -1, parts: [{ choice: 1 }, { other: 'A canary box' }] })
+      expect(said[0]).toBe(
+        [`<answer from="${src.user}" question="Which branch?" card="Release prep">next</answer>`, `<answer from="${src.user}" question="Where to?" card="Release prep">A canary box</answer>`].join('\n'),
+      )
+      // the card is answered as a whole: no question of it waits, and a second answer is refused
+      expect(src.chats.log(chat).answers[q.id]).toBe(-1)
+      expect(src.asks()[chat]).toBeUndefined()
+      expect(await src.act({ type: 'answer', chat, question: q.id, choice: -1, parts: [{ choice: 0 }, { choice: 0 }] })).toMatchObject({ ok: false })
+    } finally {
+      src.agents.send = send
+    }
+  })
+
+  test('a question marked optional may be left blank, and --ordinary is refused on a card of several', async () => {
+    const chat = placeId.home()
+    const said: string[] = []
+    const send = src.agents.send
+    src.agents.send = (async (_k: string, text: string) => (said.push(text), { waiting: false })) as never
+    try {
+      await src.cli(['ask', 'Release prep', '--question', 'Which branch?', '--choice', 'main', '--choice', 'next', '--question', 'Rerun CI?', '--choice', 'Rerun it', '--choice', 'Leave it', '--optional'], { chat })
+      const q = src.chats.log(chat).posted.findLast((p) => p.question)!.question!
+      expect(q.parts?.[1].optional).toBe(true)
+      expect(await src.act({ type: 'answer', chat, question: q.id, choice: -1, parts: [{ choice: 0 }] })).toMatchObject({ ok: true })
+      expect(said[0]).toBe(`<answer from="${src.user}" question="Which branch?" card="Release prep">main</answer>`)
+      // a card of several is always answered together with Send: one that claims one-tap is refused
+      expect((await src.cli(['ask', 'Release prep', '--ordinary', '--question', 'Which branch?', '--choice', 'main', '--choice', 'next'], { chat })).code).toBe(1)
+      // a --choice belongs to the --question before it
+      expect((await src.cli(['ask', 'Release prep', '--choice', 'main', '--question', 'Which branch?', '--choice', 'main', '--choice', 'next'], { chat })).code).toBe(1)
+    } finally {
+      src.agents.send = send
+    }
+  })
+
   test('an Other answer typed on the card is quoted, and sent from the card', async () => {
     const chat = placeId.home()
     await src.cli(['ask', 'Which branch?', '--choice', 'main', '--choice', 'next', '--other'], { chat })

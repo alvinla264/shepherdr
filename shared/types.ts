@@ -257,6 +257,23 @@ export interface Choice {
   description?: string
 }
 
+/** one question of a card that asks several at once: its own choices, its own typed answer, its own optional words */
+export interface QuestionPart {
+  title: string
+  choices: Choice[]
+  multi?: boolean
+  /** an "Other" answer with free text */
+  other?: boolean
+  /** it may be left unanswered and the card still sent; missing means it is required like the rest */
+  optional?: boolean
+  /** index of the choice picked, once answered; -1 answered in words */
+  sent?: number
+  /** the indexes picked, when several */
+  picks?: number[]
+  /** the words it was answered with (an Other answer) */
+  said?: string
+}
+
 export interface Question {
   id: string
   title: string
@@ -270,6 +287,9 @@ export interface Question {
   /** A terminal checkbox prompt can be declined without enabling any of its choices. */
   reject?: string
   choices: Choice[]
+  /** a card that asks several questions at once, answered in one Send; then `choices` is empty and each part has its
+   *  own choices, typed answer and optional flag */
+  parts?: QuestionPart[]
   multi?: boolean
   /** an "Other" answer with free text */
   other?: boolean
@@ -856,6 +876,13 @@ export interface Snapshot {
   sections?: Section[]
 }
 
+/** how one question of a card that asks several was answered: a pick, several picks, or words typed in place of them */
+export interface AnswerPart {
+  choice?: number
+  choices?: number[]
+  other?: string
+}
+
 export type Action =
   /** cid: the screen's own id for what it sent, which comes back on the message (Message.cid); reply: the id of the
       message it answers */
@@ -869,7 +896,7 @@ export type Action =
   | { type: 'secret-saved'; chat: string; card: string; name: string; level: string }
   /** fromAlert: a notification's button, which answers only the card the chat still waits on (an old alert's can't
       answer what came after, or a card already settled in words) */
-  | { type: 'answer'; chat: string; question: string; choice: number; choices?: number[]; note?: string; other?: string; fromAlert?: boolean; space?: string }
+  | { type: 'answer'; chat: string; question: string; choice: number; choices?: number[]; note?: string; other?: string; fromAlert?: boolean; space?: string; parts?: AnswerPart[] }
   | { type: 'page-send'; chat: string; page: string; text: string }
   | { type: 'page-note'; chat: string; page: string; note: string; target?: string }
   /** an artifact's page sent something, you noted on it, or wrote about it in its viewer: to its keeper. By its place,

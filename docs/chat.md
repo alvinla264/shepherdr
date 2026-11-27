@@ -12,6 +12,11 @@ Every agent, coordinator or task agent, gets the same chat.
 - Startup trust and MCP approval prompts appear as choice cards, even before the first message. The card keeps the
   CLI's screen text and offers Open terminal if it cannot read the choices. Answers are checked before messages go
   in. Only task worktrees Shepherdr creates are pre-trusted in Claude Code and Codex; a space you picked still asks.
+- A choice card asks one question, or several at once. Each question on a card has its own choices, its own
+  description under them and its own typed answer; you answer them all and tap Send once. Every question is required
+  unless its title says Optional. What reaches the agent is one line per question, each with its question. Permission,
+  approval and plan cards always take a pick and then Send; a card marked ordinary sends on the choice's tap, one
+  question at a time.
 - A slash command you type (`/clear`, `/new`, `/compact`, `/model sonnet`, a custom one) goes into the agent's CLI as
   you typed it, once its turn is over, and the CLI runs it. The chat shows it as you typed it, and what the CLI printed
   as its answer. After `/clear` or `/new` a quiet New session line starts the new session, whose log the chat reads
