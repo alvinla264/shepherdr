@@ -18,6 +18,10 @@ Every agent, coordinator or task agent, gets the same chat.
   from then on. A menu or view the command opens in the terminal (`/model` alone, `/usage`) comes into the chat and is
   closed, so your next message goes in; one that asks a question (Codex's `/new`: where should the new conversation
   run?) is a card to answer, and what you write meanwhile waits for it. A command the CLI didn't run fails with Retry.
+- Nothing is typed into a terminal that no longer holds the agent. If its CLI exited (the pane is back at its shell)
+  or something else runs there (an editor, a pager, a test), a message is not typed: one that was meant for the agent
+  waits for it and goes in first once it is back, and a terminal running another program is left alone, with the chat
+  saying which program holds it. The app's own Terminal panel still types as you do: you see the pane there.
 - Every chat shows what its agent does, calmly and in plain words (Claude Code and Codex, read from their logs). Just
   before a turn's last reply its steps sit as at most three quiet rows, each an icon for its kind (read, edit, run,
   search, web, subagent) and what it did: `Checked the task list`, `Edited 2 files: app.ts, panel.tsx  +12 −3`,

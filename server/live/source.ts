@@ -44,6 +44,7 @@ import { asMode, HOME_SPACE, HOST, NAME, placeId, Places } from './places.ts'
 import { privatePrompt, coordinatorPrompt, relaunchedLine, restartLine, resumedLine, settingsBlock } from './prompts.ts'
 import { fitHarness, harnessProblem, harnessWords, recentChat, restartHint, restartInfo, type Harness } from './restart.ts'
 import { Revivals, type Wrong } from './revive.ts'
+import type { PaneState } from './pane.ts'
 import { carryOn, Retries, type Retry } from './retry.ts'
 import { CATALOG, CLI_NAME, CLIS, kindOf, refuse, setForTask, repositorySection, Settings, type Level } from './settings.ts'
 import { startVoice } from './voice.ts'
@@ -132,6 +133,8 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
   /** agents that stopped or run on outdated files, started again by Shepherdr (revive.ts) */
   revivals = new Revivals()
   private reviving = new Set<string>()
+  /** when each chat last said that its agent wasn't in its terminal, so one line says it, not one a message */
+  private missingAt = new Map<string, number>()
   /** when a busy machine last had its finished tasks' browsers closed */
   private sweptAt = 0
   devices: () => string[] = () => []
@@ -228,6 +231,9 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     this.agents.endedSince = (key, at) => this.chats.endedSince(key, at)
     this.agents.beforeInput = async (key) => { if (!['working', 'gone'].includes(this.agents.status(key)) && await this.chats.readMenu(key, true)) this.emit('chat', key) }
     this.agents.menuUp = (key) => this.menuAnswers.has(key) || !!this.chats.menu(key)
+    // a message met a pane that no longer holds its agent: nothing was typed (agents.ts); the chat says so once, and
+    // the agent it was for is started again, a few tries at most
+    this.agents.missing = (key, state) => this.missingAgent(key, state)
     this.engine.on('card', (t, status, sub) => this.onCard(t, status, sub))
     // a task's question shows on its needs-you card in its space's chat too: the card follows it
     this.on('chat', (key) => {
@@ -1324,6 +1330,38 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     }
   }
 
+  /** a message found a pane that no longer holds its agent (agents.ts): nothing was typed. The chat says so once, in
+   *  plain words, and the agent is started again now (a few tries at most, revive.ts): what waits goes in once it is
+   *  back, with the first message a launch brings. Another program in the terminal is the human's own: it is left
+   *  alone, and the message that was refused says which one holds it. */
+  private missingAgent(key: string, state: PaneState | 'unknown') {
+    if (state === 'other' || state === 'unknown') return
+    // one starting or stopping right now is not started again: what waits goes in once herdr says it is ready
+    if (this.agents.busy(key)) return
+    const now = Date.now()
+    if (now - (this.missingAt.get(key) ?? 0) > 300_000) {
+      this.missingAt.set(key, now)
+      const text = key.includes('/')
+        ? 'Its agent isn’t running, so nothing was typed. What was sent waits, and goes in first once it is back.'
+        : 'Its agent isn’t running, so nothing was typed. Starting it again; what was sent waits for it.'
+      const id = `missing:${key}:${now}`
+      this.chats.post(key, { id, card: { id, text } })
+      if (this.watched.includes(key)) this.emit('chat', key)
+    }
+    void this.reviveNow(key).catch(() => undefined)
+  }
+
+  /** an agent started again at once, because a message met the pane without it: once per try, never in a loop */
+  private async reviveNow(key: string) {
+    if (this.reviving.has(key) || !this.keepsRunning(key)) return
+    if (!this.agents.reachable || Date.now() - this.agents.lastReach > 10_000) return
+    const why = await this.agents.wrong(key)
+    if (!why || why === 'stale') return
+    const go = this.revivals.seen(key, Date.now(), true)
+    if (go === 'go') await this.relaunch(key, why)
+    else if (go === 'give-up') this.gaveUp(key, why)
+  }
+
   /** started again a few times and still not right: its chat says so, with an alert */
   private gaveUp(key: string, why: Wrong) {
     const id = `revive:${key}:${Date.now()}`
@@ -1756,10 +1794,11 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       case 'effort':
         return { ok: false, error: 'Use the + menu agent controls and Restart to apply model or effort changes. Chat and work are preserved.' }
       case 'keys':
-        await this.agents.keys(a.chat, a.keys)
+        // the app's own terminal: a human drives the pane by hand, and sees what it holds (agents.ts: typeKeys)
+        await this.agents.typeKeys(a.chat, a.keys)
         return {}
       case 'text':
-        await this.agents.text(a.chat, a.text)
+        await this.agents.typeText(a.chat, a.text)
         return {}
       case 'call':
         return {}
@@ -2115,11 +2154,11 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       } else keys.push(String(a.choice + 1))
       await this.agents.keys(key, keys)
       if (a.other) {
-        await this.agents.text(key, a.other)
-        await this.agents.keys(key, ['enter'])
+        // words meant for the agent: held for its next run when its pane no longer holds it, never typed into another
+        if ((await this.agents.text(key, a.other, 'hold')) === 'typed') await this.agents.keys(key, ['enter'])
       }
       // the last question of a form: the CLI asks to submit
-      if (Number(idx ?? 0) >= open.items.length - 1 && open.items.length > 1) setTimeout(() => this.agents.keys(key, ['enter']), 600)
+      if (Number(idx ?? 0) >= open.items.length - 1 && open.items.length > 1) setTimeout(() => void this.agents.keys(key, ['enter']).catch(() => undefined), 600)
       const label = a.other || (a.choices ?? [a.choice]).map((i) => item?.options[i]?.label).filter(Boolean).join(', ')
       this.chats.post(key, { id: `cli-answer:${qid}`, who: 'you', answered: `Answered “${item?.question ?? ''}”`, elsewhere: space ? this.chats.answeredIn(space) : undefined, text: label })
       if (space) this.answeredHere(space, key, item?.question ?? '', label)
