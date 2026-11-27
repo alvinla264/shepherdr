@@ -538,6 +538,12 @@ describe('choice cards', () => {
       expect(q.parts?.[1].optional).toBe(true)
       expect(await src.act({ type: 'answer', chat, question: q.id, choice: -1, parts: [{ choice: 0 }] })).toMatchObject({ ok: true })
       expect(said[0]).toBe(`<answer from="${src.user}" question="Which branch?" card="Release prep">main</answer>`)
+      // every question optional, and nothing at all answered: refused, so the agent never waits on an empty card
+      await src.cli(['ask', 'Anything else?', '--question', 'Bump the version?', '--choice', 'Patch', '--choice', 'Minor', '--optional', '--question', 'Tag it?', '--choice', 'Tag', '--choice', 'No tag', '--optional'], { chat })
+      const blank = src.chats.log(chat).posted.findLast((p) => p.question)!.question!
+      expect(await src.act({ type: 'answer', chat, question: blank.id, choice: -1, parts: [] })).toMatchObject({ ok: false })
+      expect(src.chats.log(chat).answers[blank.id]).toBeUndefined()
+      expect(said.length).toBe(1)
       // a card of several is always answered together with Send: one that claims one-tap is refused
       expect((await src.cli(['ask', 'Release prep', '--ordinary', '--question', 'Which branch?', '--choice', 'main', '--choice', 'next'], { chat })).code).toBe(1)
       // a --choice belongs to the --question before it

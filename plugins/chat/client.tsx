@@ -1373,7 +1373,9 @@ function PartsCard({ q, chat, msg, from, space, source }: CardProps) {
   const sent = q.sent !== undefined
   const by = answeredBy(q, chat, msg)
   const answerOf = (i: number) => !!typed[i]?.trim() || (sel[i]?.length ?? 0) > 0
-  const ready = parts.every((p, i) => p.optional || answerOf(i))
+  // every required question answered, and something to say back: a card whose questions are all optional still needs one
+  // answer or the note
+  const ready = parts.every((p, i) => p.optional || answerOf(i)) && (parts.some((_, i) => answerOf(i)) || !!note.trim())
   const choose = (i: number, j: number) => {
     const part = parts[i]
     setSel(i, part.multi ? (sel[i]?.includes(j) ? sel[i].filter((x) => x !== j) : [...(sel[i] ?? []), j]) : [j])

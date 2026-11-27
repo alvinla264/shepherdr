@@ -2063,8 +2063,10 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       lines.push(line.answer(this.user, part.title, text, q.title))
       said.push(`${part.title} → ${text}`)
     }
+    // a card whose questions are all optional still says something: an answer, or the note
+    if (!kept.length && !a.note?.trim()) return { error: 'Answer one question before sending, or write a note: this card takes nothing back otherwise.' }
     for (const k of kept) Object.assign(q.parts![k.i], { sent: k.sent, ...(k.picks ? { picks: k.picks } : {}), ...(k.sent === -1 ? { said: k.text } : {}) })
-    return { lines, summary: said.join(' · ') }
+    return { lines, summary: said.join(' · ') || a.note!.trim() }
   }
 
   private async answer(a: Extract<Action, { type: 'answer' }>) {

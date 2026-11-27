@@ -177,9 +177,11 @@ export function userLines(text: string): string[] {
   const lines = text.split('\n')
   const out: string[] = []
   for (let i = 0; i < lines.length; i++) {
-    const open = lines[i].trim().match(LONG)
-    // its last closing tag: the words may hold one of their own
-    const close = open && lines.findLastIndex((l, j) => j >= i && l.trimEnd().endsWith(`</${open[1]}>`))
+    const line = lines[i].trim()
+    const open = line.match(LONG)
+    // one that opens and closes on its own line is whole (two answers, or two notes, in one message); one that does not
+    // may run over several lines, to its last closing tag: the words may hold one of their own
+    const close = open && !line.endsWith(`</${open[1]}>`) && lines.findLastIndex((l, j) => j >= i && l.trimEnd().endsWith(`</${open[1]}>`))
     if (close && close > i && tagOf(lines.slice(i, close + 1).join('\n').trim())) {
       out.push(lines.slice(i, close + 1).join('\n'))
       i = close
