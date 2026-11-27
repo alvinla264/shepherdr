@@ -93,8 +93,10 @@ slots below are public: plugins outside the repo rely on them, so they change on
   - Settings: `settingsPages` (a page under This device), `settingActions`
   - items with an `order` are sorted by it; base plugins space theirs out (10, 20, …), so yours can fit between.
 - Hooks and actions from `@client/kernel.ts`: `useSnap()` (the server's data: places, tasks, artifacts, settings),
-  `useUI()` and `setUI()` (what is on screen), `useStore()`, `getState()`, `act()` (send an action to the server),
-  `has(name)` (is a plugin on), and helpers such as `openTask`, `goPlace`, `placeOf`, `taskOf`.
+  `useSnapIn(['tasks', 'places'])` (the same, drawn again only when those parts change: an unchanged part keeps its
+  identity, so a view that reads a few of them isn't drawn for the rest), `useUI()` and `setUI()` (what is on screen),
+  `useStore()`, `getState()`, `act()` (send an action to the server), `has(name)` (is a plugin on), and helpers such as
+  `openTask`, `goPlace`, `placeOf`, `taskOf`.
 - The server part: `definePlugin({ name, about })`; it runs when the server starts.
 
 Autopilot adds the `autopilot-run` action and optional `keepWorkers` on the existing `mode` action.

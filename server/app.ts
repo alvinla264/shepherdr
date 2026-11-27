@@ -12,11 +12,20 @@ import type { Source } from './source.ts'
 import type { Push } from './push.ts'
 import { web, webShape } from './web.ts'
 
-type Sock =
+/** a screen, or another machine's link to this server */
+type LiveSock = {
+  kind: 'live'
+  chats: string[]
+  term: string | null
   /** visible: the screen is on; push: its push subscription, which gets no alerts while the screen is on */
-  | { kind: 'live'; chats: string[]; term: string | null; visible: boolean; push: string | null; link?: boolean }
-  | { kind: 'voice'; chat: string; bridge?: ReturnType<NonNullable<Source['voice']>> }
-  | { kind: 'browser'; task: string; bridge?: ReturnType<NonNullable<Source['browser']>> }
+  visible: boolean
+  push: string | null
+  /** link: another machine's connection, always served as a screen on view */
+  link?: boolean
+  /** it has said once what it shows */
+  ready?: boolean
+}
+type Sock = LiveSock | { kind: 'voice'; chat: string; bridge?: ReturnType<NonNullable<Source['voice']>> } | { kind: 'browser'; task: string; bridge?: ReturnType<NonNullable<Source['browser']>> }
 
 const FONT = join(import.meta.dir, '..', 'node_modules', 'inter-ui', 'variable', 'InterVariable.woff2')
 
@@ -54,7 +63,12 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
     w.unref?.()
   }
 
+  /** a live connection on view: a screen visible to its user, or another machine's link (which always is) */
+  const onView = (ws: ServerWebSocket<Sock>): ws is ServerWebSocket<LiveSock> => ws.data.kind === 'live' && (ws.data.visible || !!ws.data.link)
+  // no screen on view anywhere (every tab hidden, no machine link): no chat and no terminal is read for nobody. With one
+  // on view, every screen is followed as before, so a tab hidden behind another is still current when it comes back.
   const rewatch = () => {
+    if (![...live].some(onView)) return source.watch([], [])
     const chats = new Set<string>()
     const terms = new Set<string>()
     for (const ws of live) {
@@ -266,12 +280,22 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
           if (m.type === 'ping') return void send(ws, { type: 'pong' })
           if (m.type !== 'watch') return
           const before = new Set(d.chats)
+          const wasVisible = d.visible
           d.chats = m.chats
           d.term = m.term
           d.visible = !!m.visible
           d.push = m.push ?? null
           d.link = !!m.link
           if (d.link) for (const news of unsent.splice(0)) send(ws, { type: 'news', news } as unknown as ServerEvent)
+          if (d.visible && !wasVisible && d.ready) {
+            // back on screen: nothing was sent while it was hidden, so everything it shows is caught up in one go
+            send(ws, { type: 'snapshot', snapshot: source.snapshot() })
+            for (const k of m.chats) {
+              const chat = source.chat(k)
+              if (chat) send(ws, { type: 'chat', chat })
+            }
+          }
+          d.ready = true
           for (const k of m.chats) {
             if (before.has(k)) continue
             const chat = source.chat(k)
