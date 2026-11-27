@@ -16,13 +16,24 @@ export function fakeAgentBrowser() {
   chmodSync(bin, 0o755)
   const dir = mkdtempSync(join(tmpdir(), 'shep-ab-'))
   const streamSocks = new Set<ServerWebSocket<unknown>>()
+  // connections on their way in: the handshake is not done until open, so a connection a test opened is watched from the
+  // request on, not only once it is up (a test that went away meanwhile leaves it here for afterEach to wait for)
+  const handshakes = new Set<number>()
+  let handshakeId = 0
   const fromPanel: Record<string, unknown>[] = []
-  const stream = Bun.serve({
+  const stream = Bun.serve<number>({
     port: 0,
     hostname: '127.0.0.1',
-    fetch: (req, s) => (s.upgrade(req) ? undefined : new Response('no')),
+    fetch: (req, s) => {
+      const id = ++handshakeId
+      handshakes.add(id)
+      if (s.upgrade(req, { data: id })) return undefined
+      handshakes.delete(id)
+      return new Response('no')
+    },
     websocket: {
       open(ws) {
+        handshakes.delete(ws.data)
         streamSocks.add(ws)
         ws.send(JSON.stringify({ type: 'status', connected: true, screencasting: true, viewportWidth: 1280, viewportHeight: 720 }))
         ws.send(JSON.stringify({ type: 'tabs', tabs: [{ active: true, targetId: 'T1', title: 'Settings', url: 'http://localhost:5173/settings' }] }))
@@ -31,6 +42,7 @@ export function fakeAgentBrowser() {
         fromPanel.push(JSON.parse(String(m)))
       },
       close(ws) {
+        handshakes.delete(ws.data)
         streamSocks.delete(ws)
       },
     },
@@ -89,7 +101,7 @@ export function fakeAgentBrowser() {
     stream.stop(true)
     cdp.stop(true)
   }
-  return { bin, dir, stream, cdp, streamSocks, fromPanel, toPanels, cdpCalls, state, calls, reset, stop, env: { FAKE_AGENT_BROWSER: dir } }
+  return { bin, dir, stream, cdp, streamSocks, handshakes, fromPanel, toPanels, cdpCalls, state, calls, reset, stop, env: { FAKE_AGENT_BROWSER: dir } }
 }
 
 if (import.meta.main) cli()
