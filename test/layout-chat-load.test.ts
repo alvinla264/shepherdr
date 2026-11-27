@@ -97,4 +97,46 @@ describe.skipIf(!browser)('a chat with hundreds of messages', () => {
     expect(seen!.y + seen!.height).toBeGreaterThan(view!.y)
     await page.close()
   }, 60_000)
+
+  test('a pick made on a question card is still picked when the window draws the card again (phone)', async () => {
+    const key = 'p:vm-str:~'
+    const base = Date.UTC(2026, 4, 1, 12, 23)
+    const many: Message[] = Array.from({ length: 400 }, (_, i): Message => ({
+      id: `pick-${i}`,
+      who: i % 2 ? 'agent' : 'you',
+      at: base + i * 60_000,
+      text: i % 2 ? `A reply with **bold**, number ${i}.` : `Question number ${i}`,
+    }))
+    // the oldest is taller than the screen; the newest asks a question that is picked and not sent yet
+    many[0] = tall('pick-0', base)
+    many.push({
+      id: 'pick-q',
+      who: 'agent',
+      at: base + 400 * 60_000,
+      question: { id: 'pick:q', kind: 'Form', title: 'Which target?', choices: [{ label: 'Target A' }, { label: 'Target B' }], to: key },
+    })
+    world.chats[key].messages = many
+
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    await page.goto(url())
+    const card = page.locator('[data-whole="pick-q"] [data-card]')
+    await card.waitFor({ timeout: 30_000 })
+    // picked, not sent: Send is enabled, the choice stays pressed
+    const pick = card.getByRole('button', { name: 'Target A', exact: true })
+    await pick.click()
+    expect(await pick.getAttribute('aria-pressed')).toBe('true')
+    expect(await card.getByRole('button', { name: 'Send', exact: true }).isEnabled()).toBe(true)
+
+    // scrolled to the oldest, the card is not drawn at all
+    await page.evaluate(() => ((document.querySelector('[data-messages]')!.closest('.overflow-y-auto') as HTMLElement).scrollTop = 0))
+    await page.locator('[data-msg="pick-0"]').waitFor({ timeout: 10_000 })
+    expect(await page.locator('[data-whole="pick-q"]').count()).toBe(0)
+
+    // back at the newest, drawn again: the pick is still on it, so Send still is
+    await page.getByRole('button', { name: /jump to the latest/i }).click()
+    await card.waitFor({ timeout: 10_000 })
+    expect(await pick.getAttribute('aria-pressed')).toBe('true')
+    expect(await card.getByRole('button', { name: 'Send', exact: true }).isEnabled()).toBe(true)
+    await page.close()
+  }, 60_000)
 })

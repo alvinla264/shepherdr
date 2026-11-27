@@ -22,7 +22,7 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
   const top = useRef<HTMLDivElement>(null)
   const bottom = useRef<HTMLDivElement>(null)
   /** the rows read from the scroll position: null while the chat is at its newest message, which it follows */
-  const [free, setFree] = useState<{ start: number; end: number } | null>(null)
+  const [free, setFree] = useState<{ start: number; end: number; toEnd: boolean } | null>(null)
   const scroller = useRef<HTMLElement | null>(null)
   /** what shows at the top of the viewport (or the message jumped to), and where it was, so a change above it keeps it */
   const anchor = useRef<{ el: HTMLElement; top: number } | null>(null)
@@ -39,7 +39,9 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
   const told = useRef('')
   // the newest message and what is just above it, or the rows around where the chat was scrolled to
   const atTail = !free || free.end > rows.length || free.start >= rows.length
-  const drawn = atTail ? { start: Math.max(0, rows.length - AT_TAIL), end: rows.length } : { start: free.start, end: follow(free.end, rows.length) }
+  // a window that reached the end of the chat when it was read follows it as replies come in (the New line is one of
+  // them): nothing scrolls to draw them otherwise
+  const drawn = atTail ? { start: Math.max(0, rows.length - AT_TAIL), end: rows.length } : { start: free.start, end: free.toEnd ? rows.length : Math.min(free.end, rows.length) }
   const keys = rows.map((r) => r.key)
   // what the listeners read: this render's rows, and where they are drawn
   const now = useRef({ rows, keys, drawn, atTail })
@@ -63,6 +65,10 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
     }
     for (let j = Math.min(at.index, drawn.start); j < Math.max(at.index, drawn.start); j++) at.offset += drawn.start > at.index ? sizes.height(keys[j]) : -sizes.height(keys[j])
     at.index = drawn.start
+    // rows measured while they were drawn, or a row that came back with another key, can leave the carried place a few
+    // pixels off what the rows above it add up to: never below the top, and zero there (the spacer clamps and the list
+    // would not line up with it)
+    at.offset = drawn.start === 0 ? 0 : Math.max(0, at.offset)
     // what is not drawn stands in with a spacer as tall as the rows that are, less the gap that meets it
     height(top.current, at.offset - GAP)
     height(bottom.current, baseline(sizes, keys, drawn.end) - GAP)
@@ -123,7 +129,7 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
       if (atTail || next.start !== drawn.start || next.end !== drawn.end) {
         anchor.current = spot(el, keys, sizes, top, start.current)
         moved.current++
-        setFree(next)
+        setFree({ ...next, toEnd: next.end >= keys.length })
       }
     }
     box.addEventListener('scroll', read, { passive: true })
@@ -149,7 +155,7 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
         // where it is, as the rows are known now (the window draws it there, then the jump puts it where it shows)
         const from = down(sizes, keys, start.current, i)
         const { start: s, end } = windowAt(sizes, keys, from, scroller.current?.clientHeight ?? 600, { index: i, offset: from })
-        setFree({ start: s, end })
+        setFree({ start: s, end, toEnd: end >= keys.length })
       }),
     [chat, sizes],
   )
@@ -158,12 +164,6 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
   out.push(<div key="window-bottom" data-window-bottom ref={bottom} aria-hidden="true" className="shrink-0" />)
   if (tail) out.push(<Fragment key="window-tail">{tail}</Fragment>)
   return <>{out}</>
-}
-
-/** where a window read from the scroll position ends, once the chat has grown at its end: a window that reached the end
-    follows it (a reply just in, the New line before it: no scroll happens to draw them otherwise) */
-function follow(end: number, rows: number) {
-  return end >= rows - 1 ? rows : end
 }
 
 /** a spacer's height: none at all when nothing is missing there, so its own gap goes too */

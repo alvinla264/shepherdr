@@ -1309,6 +1309,10 @@ export function CardShell({ title, plan, icon, action, source, children }: { tit
   )
 }
 
+/** what was picked on a card not sent yet, kept while the screen is: a long chat draws only the rows near what shows, so
+    a card can be drawn again (scrolled away from and back) with what was picked on it still picked */
+const chosen = new Map<string, number[]>()
+
 /** how a card was answered: a pick (or an Other answer) on it, a message in the chat, or the CLI's own terminal */
 function answeredHow(q: Question) {
   if (q.via === 'chat') return 'Answered in chat'
@@ -1321,7 +1325,13 @@ const noteBox = clsx('min-h-10 w-full resize-none rounded-row bg-transparent px-
 /** space: a copy of a task's question on its needs-you card in that space's chat, answered there */
 export function QuestionCard({ q, chat, msg, from, space, source }: { q: Question; chat: Chat; msg: string; from: string; space?: string; source?: CardSource }) {
   // Unmarked cards always require a deliberate pick and Send, including all approval prompts.
-  const [sel, setSel] = useState<number[]>([])
+  const picks = `${chat.key}:${q.id}`
+  const [sel, setPicked] = useState<number[]>(() => chosen.get(picks) ?? [])
+  const setSel = (next: number[]) => {
+    if (next.length) chosen.set(picks, next)
+    else chosen.delete(picks)
+    setPicked(next)
+  }
   // half-typed notes survive a reload
   const [note, setNote] = useDraft(`card:${chat.key}:${q.id}`)
   const [other, setOther] = useDraft(`card-other:${chat.key}:${q.id}`)
@@ -1354,6 +1364,7 @@ export function QuestionCard({ q, chat, msg, from, space, source }: { q: Questio
         accepted = true
         setNote('')
         setOther('')
+        chosen.delete(picks)
       }
     } catch (e) {
       setErr(reasonOf(e))
