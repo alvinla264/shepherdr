@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { ROOT } from '../root.ts'
-import { helperDir, q, sshArgs, type BoxInfo } from './box.ts'
+import { GUARD_COMMANDS, helperDir, q, sshArgs, type BoxInfo } from './box.ts'
 
 /** a machine as herdr saved it (herdr machine list --json) */
 export interface Saved {
@@ -128,6 +128,8 @@ export function helperFiles(os: string, arch: string): [string, string][] {
     ['health.pl', join(ROOT, 'helper', 'health.pl')],
     ['relay.pl', join(ROOT, 'helper', 'relay.pl')],
   ]
+  // the live-session guard (bin/guard, docs/guard.md): on that machine as real files, so each knows its own name
+  for (const n of GUARD_COMMANDS) files.push([join('bin', 'guard', n), join(ROOT, 'bin', 'guard', n)])
   const ab = browserBinary(os, arch)
   if (ab) files.push(['bin/agent-browser', join(ROOT, 'helper', 'agent-browser')], ['bin/agent-browser-bin', ab])
   const walk = (dir: string) => {

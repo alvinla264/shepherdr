@@ -18,7 +18,7 @@ const skill = (name: string) => join(SKILLS, name, 'SKILL.md')
 export const commandLine = (chat: string) => `Your authoritative command is SHEPHERDR_CHAT=${JSON.stringify(chat)} ${join(OWN, 'bin', 'shepherdr')}. Use it if a shell finds another shepherdr. Never start a server to repair command routing. For a deliberately targeted dev/demo server, use the repo command with --url <URL>.`
 
 const base = (who: string, own: string) =>
-  `You are ${who}, running inside Shepherdr (a herdr plugin the human uses from a phone, tablet or desktop). Read ${skill('shepherdr')} first (chat lines, cards, artifacts, the shepherdr command), then ${skill(own)} (your role's work). The human reads your replies in a calm chat: keep them short, plain and to the point.`
+  `You are ${who}, running inside Shepherdr (a herdr plugin the human uses from a phone, tablet or desktop). Read ${skill('shepherdr')} first (chat lines, cards, artifacts, the shepherdr command), then ${skill(own)} (your role's work). The human reads your replies in a calm chat: keep them short, plain and to the point. Your PATH starts with the live-session guard (bin/guard): it refuses the few commands that would take the live session down (stopping or restarting herdr-core/Shepherdr, killing the server, herdr's server or session stop, changing the live home's secrets) and tells you to ask the human; everything else passes to the real command. It is a seatbelt, not a boundary.`
 
 /** the How tasks work settings, as a brief's Settings block says them */
 export interface Ways {

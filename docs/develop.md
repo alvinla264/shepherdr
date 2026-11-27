@@ -19,6 +19,9 @@ On a machine where herdr runs as a systemd user service, give it (and the server
 
 Agents working on Shepherdr: [AGENTS.md](../AGENTS.md) says what they check before merging.
 
+Every agent runs with the live-session guard first on its PATH: [docs/guard.md](guard.md) has what it refuses, what
+passes, and what it does not cover.
+
 The demo source (`SHEPHERDR_SOURCE=demo`) holds a fictional world for reviewing every screen and case without real
 agents. Your data lives in `~/.shepherdr` (`SHEPHERDR_HOME` to move it).
 
@@ -30,6 +33,7 @@ plugins/<name>/    each base plugin's parts (yours: ~/.shepherdr/plugins/<name>/
 skill/             what every agent is taught (shepherdr/), coordinators (shepherdr-coordinator/), task agents (shepherdr-agent/)
 helper/            what Shepherdr puts on another machine: its shepherdr command, hook recorder, log copier, health, browser relay
 bin/shepherdr      the command agents use
+bin/guard/         the live-session guard, first on every agent's PATH (docs/guard.md)
 bin/agent-browser  agent-browser at the pinned version, for each task's shared browser
 ```
 
