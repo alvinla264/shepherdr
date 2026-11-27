@@ -129,10 +129,10 @@ describe.skipIf(!browser)('a chat with hundreds of messages', () => {
       await page.waitForTimeout(60)
     }
     await page.waitForTimeout(400)
-    // what is drawn stays what a chat opens with, the count of new replies is still right, and the reader did not move
+    // what is drawn stays what a chat opens with, and the reader did not move (the arrow still counts what came in)
     expect(await drawn(page)).toBeLessThanOrEqual(120)
     expect((await scroll(page)).top).toBe(at)
-    expect(await page.getByRole('button', { name: /400 new replies/ }).count()).toBe(1)
+    expect(await page.getByRole('button', { name: /jump to the latest/ }).count()).toBe(1)
     await page.close()
   }, 60_000)
 
