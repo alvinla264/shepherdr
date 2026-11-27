@@ -1,6 +1,8 @@
-// A chat with hundreds of messages in it, in a real browser (layout.ts): every reply taller than the screen still
-// folds to Show more and opens, though each one is measured by its own observer as it comes in rather than read for
-// its height on the way into the DOM (fold.tsx), and each message's time comes from one formatter for them all.
+// A chat with hundreds of messages in it, in a real browser (layout.ts): only the messages near what shows are drawn,
+// with a spacer standing in for the rest (window.tsx), so the DOM stops growing with how long an agent has run. It
+// still opens at its newest message, scrolls to the oldest at the top, lands on a message jumped to from far outside
+// what is drawn, and every reply taller than the screen still folds (measured by its own observer, fold.tsx, and
+// folded at once when the window draws it again). Each message's time comes from one formatter for them all.
 import { describe, expect, test } from 'bun:test'
 import type { Message } from '../shared/types.ts'
 import { layout } from './layout.ts'
@@ -15,52 +17,164 @@ const tall = (id: string, at: number, word = 'Line'): Message => ({
   text: Array.from({ length: 40 }, (_, i) => `${word} ${i + 1} of a reply far taller than the screen.`).join('\n\n'),
 })
 
-describe.skipIf(!browser)('a chat with many messages', () => {
-  test('folds every tall reply and opens it, and says each time (phone)', async () => {
+/** the chat's scroller: how far it is from its bottom, and where it is */
+const scroll = (page: import('playwright-core').Page) =>
+  page.evaluate(() => {
+    const el = document.querySelector('[data-messages]')!.closest('.overflow-y-auto') as HTMLElement
+    return { left: el.scrollHeight - el.scrollTop - el.clientHeight, top: el.scrollTop }
+  })
+
+/** how many of the chat's messages are drawn */
+const drawn = (page: import('playwright-core').Page) => page.locator('[data-messages] [data-msg]').count()
+
+describe.skipIf(!browser)('a chat with hundreds of messages', () => {
+  test('draws only what is near what shows, follows the scroll to either end, and jumps to a message far down it (phone)', async () => {
     const key = 'p:vm-str:~'
     // the same minute twice, then another: what a time must say, without depending on this machine's clock settings
     const base = Date.UTC(2026, 4, 1, 12, 23)
-    const many: Message[] = [
-      { id: 'minute-a', who: 'you', at: base, text: 'The same minute.' },
-      { id: 'minute-b', who: 'agent', at: base + 20_000, text: 'Twenty seconds later.' },
-      { id: 'minute-c', who: 'agent', at: base + 120_000, text: 'Two minutes later.' },
-    ]
-    for (let i = 0; i < 150; i++) {
-      many.push({ id: `ask-${i}`, who: 'you', at: base + 600_000 + i * 2000, text: `Pass ${i}, please.` })
-      many.push(
-        i % 50 === 0
-          ? tall(`reply-${i}`, base + 600_000 + i * 2000 + 1, `Tall line ${i}`)
-          : { id: `reply-${i}`, who: 'agent', at: base + 600_000 + i * 2000 + 1, text: `Done with pass ${i}.` },
-      )
-    }
+    const many: Message[] = Array.from({ length: 400 }, (_, i): Message => ({
+      id: `long-${i}`,
+      who: i % 2 ? 'agent' : 'you',
+      at: base + i * 60_000,
+      text: i % 2 ? `A reply with **bold** and \`code\`, number ${i}.` : `Question number ${i}`,
+    }))
+    // the oldest is far taller than the screen, and the second newest answers it: a tap on that quote jumps back to it
+    many[0] = tall('long-0', base)
+    many[399] = { id: 'long-399', who: 'agent', at: base + 399 * 60_000, text: 'Here it is, from the top.', reply: { id: 'long-0', who: 'agent', text: 'Tall line 1 of a reply far taller than the screen.' } }
+    many.push(
+      { id: 'minute-a', who: 'you', at: base + 400 * 60_000, text: 'The same minute.' },
+      { id: 'minute-b', who: 'agent', at: base + 400 * 60_000 + 20_000, text: 'Twenty seconds later.' },
+      { id: 'minute-c', who: 'agent', at: base + 402 * 60_000, text: 'Two minutes later.' },
+    )
     world.chats[key].messages = many
 
     const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
     await page.goto(url())
-    await page.locator('[data-msg="reply-149"]').waitFor({ timeout: 30_000 })
-    // a reply is measured after it is in the DOM, so wait for the folds rather than for the rows: all three, and no more
-    await page.waitForFunction(() => document.querySelectorAll('[data-folded]').length === 3, null, { timeout: 30_000 })
-
-    // every tall reply is folded, and no short one grew the button
-    expect(await page.getByRole('button', { name: 'Show more' }).count()).toBe(3)
-    for (const i of [0, 50, 100]) expect((await page.locator(`[data-msg="reply-${i}"] [data-anchor]`).boundingBox())!.height).toBeLessThan(420)
-    expect(await page.locator('[data-msg="reply-149"]').getByRole('button', { name: /Show more|Show less/ }).count()).toBe(0)
-
-    // one opens, and closes again
-    const first = page.locator('[data-msg="reply-0"]')
-    await first.getByRole('button', { name: 'Show more' }).evaluate((b) => (b as HTMLElement).click())
-    await first.getByRole('button', { name: 'Show less' }).waitFor()
-    expect((await first.locator('[data-anchor]').boundingBox())!.height).toBeGreaterThan(900)
-    await first.getByRole('button', { name: 'Show less' }).evaluate((b) => (b as HTMLElement).click())
-    await first.getByRole('button', { name: 'Show more' }).waitFor()
-    expect((await first.locator('[data-anchor]').boundingBox())!.height).toBeLessThan(420)
+    // it opens at its newest message, as before, whatever the chat's size
+    await page.locator('[data-msg="minute-c"]').waitFor({ timeout: 30_000 })
+    expect((await scroll(page)).left).toBeLessThan(2)
+    // only the messages near it are drawn, out of 403: the oldest is not in the DOM at all
+    const near = await drawn(page)
+    expect(near).toBeGreaterThan(20)
+    expect(near).toBeLessThan(200)
+    expect(await page.locator('[data-msg="long-0"]').count()).toBe(0)
 
     // each message says its own time, as this browser would say it: the same for two in one minute, another for the next
     const time = (id: string) => page.locator(`[data-arrive]:has([data-msg="${id}"]) time`).textContent()
     const [a, b, c] = [await time('minute-a'), await time('minute-b'), await time('minute-c')]
-    expect(a).toBe(await page.evaluate((at) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), base))
+    expect(a).toBe(await page.evaluate((at) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), base + 400 * 60_000))
     expect(b).toBe(a)
     expect(c).not.toBe(a)
+
+    // read to the top: the oldest is drawn there, and what was at the bottom is gone again
+    await page.evaluate(() => ((document.querySelector('[data-messages]')!.closest('.overflow-y-auto') as HTMLElement).scrollTop = 0))
+    await page.locator('[data-msg="long-0"]').waitFor({ timeout: 10_000 })
+    expect((await scroll(page)).top).toBeLessThan(2)
+    expect(await drawn(page)).toBeLessThan(200)
+    expect(await page.locator('[data-msg="minute-c"]').count()).toBe(0)
+
+    // a reply taller than the screen still folds, and opens: measured as it comes into the window
+    const first = page.locator('[data-msg="long-0"]')
+    await first.getByRole('button', { name: 'Show more' }).waitFor({ timeout: 10_000 })
+    expect((await first.locator('[data-anchor]').boundingBox())!.height).toBeLessThan(420)
+    await first.getByRole('button', { name: 'Show more' }).evaluate((b) => (b as HTMLElement).click())
+    await first.getByRole('button', { name: 'Show less' }).waitFor()
+    expect((await first.locator('[data-anchor]').boundingBox())!.height).toBeGreaterThan(900)
+
+    // the arrow back to the newest message lands on it, as it did when every message was drawn
+    await page.getByRole('button', { name: /jump to the latest/i }).click()
+    await page.locator('[data-msg="minute-c"]').waitFor({ timeout: 10_000 })
+    expect((await scroll(page)).left).toBeLessThan(2)
+
+    // a jump to a message far outside what is drawn draws it and lands on it, lit up for a moment
+    await page.locator('[data-msg="long-399"] [data-quote]').evaluate((q) => (q as HTMLElement).click())
+    const old = page.locator('[data-msg="long-0"] [data-anchor][data-flash]')
+    await old.waitFor({ timeout: 10_000 })
+    // what the scroller shows, not the whole list (the spacers stand in for the rows left out)
+    const scroller = page.locator('[data-messages]').locator('xpath=ancestor::*[contains(@class,"overflow-y-auto")][1]')
+    const [seen, view] = await Promise.all([old.boundingBox(), scroller.boundingBox()])
+    expect(seen!.y).toBeLessThan(view!.y + view!.height)
+    expect(seen!.y + seen!.height).toBeGreaterThan(view!.y)
     await page.close()
-  })
+  }, 60_000)
+
+  test('a chat that keeps growing while you read further up draws no more rows than one that just opened (phone)', async () => {
+    const key = 'p:vm-str:~'
+    const base = Date.UTC(2026, 4, 1, 12, 23)
+    world.chats[key].messages = Array.from({ length: 400 }, (_, i): Message => ({
+      id: `grow-${i}`,
+      who: i % 2 ? 'agent' : 'you',
+      at: base + i * 60_000,
+      text: i % 2 ? `A reply with **bold**, number ${i}.` : `Question number ${i}`,
+    }))
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    await page.goto(url())
+    await page.locator('[data-msg="grow-399"]').waitFor({ timeout: 30_000 })
+    await page.waitForTimeout(300)
+    // read a little above the newest: the window reaches the chat's end
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-messages]')!.closest('.overflow-y-auto') as HTMLElement
+      el.scrollTop = el.scrollHeight - el.clientHeight - 200
+    })
+    await page.waitForTimeout(300)
+    const at = (await scroll(page)).top
+    // the agent keeps working: 400 replies come in while the chat stays where it is read
+    const emit = (world as unknown as { emit(e: string, k: string): void }).emit.bind(world)
+    for (let batch = 0; batch < 40; batch++) {
+      for (let i = 0; i < 10; i++) {
+        const n = batch * 10 + i
+        world.chats[key].messages.push({ id: `grow-news-${n}`, who: 'agent', text: `Pass ${n} is merged.`, at: Date.now() + n })
+      }
+      emit('chat', key)
+      await page.waitForTimeout(60)
+    }
+    await page.waitForTimeout(400)
+    // what is drawn stays what a chat opens with, and the reader did not move (the arrow still counts what came in)
+    expect(await drawn(page)).toBeLessThanOrEqual(120)
+    expect((await scroll(page)).top).toBe(at)
+    expect(await page.getByRole('button', { name: /jump to the latest/ }).count()).toBe(1)
+    await page.close()
+  }, 60_000)
+
+  test('a pick made on a question card is still picked when the window draws the card again (phone)', async () => {
+    const key = 'p:vm-str:~'
+    const base = Date.UTC(2026, 4, 1, 12, 23)
+    const many: Message[] = Array.from({ length: 400 }, (_, i): Message => ({
+      id: `pick-${i}`,
+      who: i % 2 ? 'agent' : 'you',
+      at: base + i * 60_000,
+      text: i % 2 ? `A reply with **bold**, number ${i}.` : `Question number ${i}`,
+    }))
+    // the oldest is taller than the screen; the newest asks a question that is picked and not sent yet
+    many[0] = tall('pick-0', base)
+    many.push({
+      id: 'pick-q',
+      who: 'agent',
+      at: base + 400 * 60_000,
+      question: { id: 'pick:q', kind: 'Form', title: 'Which target?', choices: [{ label: 'Target A' }, { label: 'Target B' }], to: key },
+    })
+    world.chats[key].messages = many
+
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    await page.goto(url())
+    const card = page.locator('[data-whole="pick-q"] [data-card]')
+    await card.waitFor({ timeout: 30_000 })
+    // picked, not sent: Send is enabled, the choice stays pressed
+    const pick = card.getByRole('button', { name: 'Target A', exact: true })
+    await pick.click()
+    expect(await pick.getAttribute('aria-pressed')).toBe('true')
+    expect(await card.getByRole('button', { name: 'Send', exact: true }).isEnabled()).toBe(true)
+
+    // scrolled to the oldest, the card is not drawn at all
+    await page.evaluate(() => ((document.querySelector('[data-messages]')!.closest('.overflow-y-auto') as HTMLElement).scrollTop = 0))
+    await page.locator('[data-msg="pick-0"]').waitFor({ timeout: 10_000 })
+    expect(await page.locator('[data-whole="pick-q"]').count()).toBe(0)
+
+    // back at the newest, drawn again: the pick is still on it, so Send still is
+    await page.getByRole('button', { name: /jump to the latest/i }).click()
+    await card.waitFor({ timeout: 10_000 })
+    expect(await pick.getAttribute('aria-pressed')).toBe('true')
+    expect(await card.getByRole('button', { name: 'Send', exact: true }).isEnabled()).toBe(true)
+    await page.close()
+  }, 60_000)
 })

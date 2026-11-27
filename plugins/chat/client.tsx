@@ -11,11 +11,12 @@ import { extOf, isImage } from '@shared/files.ts'
 import { modeName, type CardAsk, type Chat, type Message, type Place, type Question, type ReplyQuote, type SecretAsk, type UpdateCard } from '@shared/types.ts'
 import { buzz, mine, openBar, openPicker, quick, react } from '@plugins/reactions/client.tsx'
 import { EDGE } from '@client/gestures.ts'
-import { still, useArrive } from '@client/motion.ts'
+import { still } from '@client/motion.ts'
 import { draggingFiles, dropped, named, pasted } from './paste.ts'
 import { dayLabel } from './days.ts'
 import { FindBar, openFind } from './find.tsx'
 import { Fold } from './fold.tsx'
+import { Window, type RowInfo } from './window.tsx'
 import { Markdown } from './markdown.tsx'
 import { answeredBy, cancelReply, canReply, isArtifact, jumpTo, startReply } from './reply.ts'
 import { typing, working } from './typing.ts'
@@ -1201,10 +1202,10 @@ const Messages = memo(function Messages({ chat, from }: { chat: Chat; from: stri
     parts.forEach((msg, i) => items.push({ at: out.at, msg, out, last: i === parts.length - 1 }))
   }
   // pictures sent together (they share their time) sit side by side, like an album
-  const rows: Item[] = []
+  const lines: Item[] = []
   for (const it of items) {
-    const last = rows.at(-1)
-    if (!('msg' in it) || !isPicture(it.msg)) rows.push(it)
+    const last = lines.at(-1)
+    if (!('msg' in it) || !isPicture(it.msg)) lines.push(it)
     else {
       const m = it.msg
       const prev = last && 'album' in last ? last.album.at(-1)! : null
@@ -1212,42 +1213,54 @@ const Messages = memo(function Messages({ chat, from }: { chat: Chat; from: stri
         const album = last as Extract<Item, { album: Message[] }>
         album.album.push(m)
         album.last = it.last
-      } else rows.push({ at: it.at, album: [m], out: it.out, last: it.last })
+      } else lines.push({ at: it.at, album: [m], out: it.out, last: it.last })
     }
   }
-  const newAt = useContext(NewAt)
-  // a message just sent, or just in, rises into place
-  const list = useRef<HTMLDivElement>(null)
-  useArrive(list, chat.key)
+  // each row as a fact first (a chat of 15 000 messages is walked in a few ms): where it starts a day, where the New line
+  // goes, its key, and the ids it holds. Only the rows near what shows are drawn from them (window.tsx)
+  const rows: RowInfo[] = []
   let day = ''
+  for (const it of lines) {
+    const at = it.at > 1e12 ? it.at : 0
+    const d = at ? new Date(at).toDateString() : day
+    const dated = !!at && d !== day
+    day = d
+    const first = 'album' in it ? it.album[0].id : it.msg.id
+    const key = keyOf('album' in it ? it.album[0] : it.msg)
+    rows.push({ key, at, first, dated, ids: 'album' in it ? it.album.map((m) => m.id) : it.msg.id !== key ? [it.msg.id] : undefined })
+  }
+  const newAt = useContext(NewAt)
+  const list = useRef<HTMLDivElement>(null)
+  const draw = (i: number) => {
+    const it = lines[i]
+    const f = rows[i]
+    return (
+      <Fragment key={f.key}>
+        {f.dated ? <DateLine at={f.at} /> : null}
+        {newAt === f.first ? <NewLine /> : null}
+        <Row at={f.at} arrive={f.key}>
+          {'album' in it ? (
+            <Album msgs={it.album} chat={chat} from={from} out={it.out} last={it.last} />
+          ) : (
+            <Bubble msg={it.msg} chat={chat} from={from} out={it.out} last={it.last} />
+          )}
+        </Row>
+      </Fragment>
+    )
+  }
   return (
     // a finger sliding a message left moves them all (--peek), and each one's time comes in at the right, like iMessage
     <div ref={list} data-messages className="mx-auto flex w-full max-w-read flex-1 flex-col gap-3.5 px-5 pt-5 pb-3 phone:px-4">
       {!rows.length ? <Empty className="p-0!">No messages yet. Write to start.</Empty> : null}
-      {rows.map((it) => {
-        const at = it.at > 1e12 ? it.at : 0
-        const d = at ? new Date(at).toDateString() : day
-        const dated = !!at && d !== day
-        day = d
-        const first = 'album' in it ? it.album[0].id : it.msg.id
-        const key = keyOf('album' in it ? it.album[0] : it.msg)
-        return (
-          <Fragment key={key}>
-            {dated ? <DateLine at={at} /> : null}
-            {newAt === first ? <NewLine /> : null}
-            <Row at={at} arrive={key}>
-              {'album' in it ? (
-                <Album msgs={it.album} chat={chat} from={from} out={it.out} last={it.last} />
-              ) : (
-                <Bubble msg={it.msg} chat={chat} from={from} out={it.out} last={it.last} />
-              )}
-            </Row>
-          </Fragment>
-        )
-      })}
-      {registry.chatTail.map(({ View }, i) => (
-        <View key={i} chat={chat} from={from} />
-      ))}
+      <Window
+        chat={chat.key}
+        list={list}
+        rows={rows}
+        draw={draw}
+        tail={registry.chatTail.map(({ View }, i) => (
+          <View key={i} chat={chat} from={from} />
+        ))}
+      />
     </div>
   )
 })
@@ -1296,6 +1309,10 @@ export function CardShell({ title, plan, icon, action, source, children }: { tit
   )
 }
 
+/** what was picked on a card not sent yet, kept while the screen is: a long chat draws only the rows near what shows, so
+    a card can be drawn again (scrolled away from and back) with what was picked on it still picked */
+const chosen = new Map<string, number[]>()
+
 /** how a card was answered: a pick (or an Other answer) on it, a message in the chat, or the CLI's own terminal */
 function answeredHow(q: Question) {
   if (q.via === 'chat') return 'Answered in chat'
@@ -1308,7 +1325,13 @@ const noteBox = clsx('min-h-10 w-full resize-none rounded-row bg-transparent px-
 /** space: a copy of a task's question on its needs-you card in that space's chat, answered there */
 export function QuestionCard({ q, chat, msg, from, space, source }: { q: Question; chat: Chat; msg: string; from: string; space?: string; source?: CardSource }) {
   // Unmarked cards always require a deliberate pick and Send, including all approval prompts.
-  const [sel, setSel] = useState<number[]>([])
+  const picks = `${chat.key}:${q.id}`
+  const [sel, setPicked] = useState<number[]>(() => chosen.get(picks) ?? [])
+  const setSel = (next: number[]) => {
+    if (next.length) chosen.set(picks, next)
+    else chosen.delete(picks)
+    setPicked(next)
+  }
   // half-typed notes survive a reload
   const [note, setNote] = useDraft(`card:${chat.key}:${q.id}`)
   const [other, setOther] = useDraft(`card-other:${chat.key}:${q.id}`)
@@ -1341,6 +1364,7 @@ export function QuestionCard({ q, chat, msg, from, space, source }: { q: Questio
         accepted = true
         setNote('')
         setOther('')
+        chosen.delete(picks)
       }
     } catch (e) {
       setErr(reasonOf(e))
@@ -1463,12 +1487,24 @@ export function QuestionCard({ q, chat, msg, from, space, source }: { q: Questio
 
 /* ---------- a secret an agent asked for ---------- */
 
+/** a secret typed into a card and not saved yet, and where it goes, kept in memory only (never a draft, never storage)
+    while the screen is: a long chat draws only the rows near what shows, so the card can be drawn again */
+const unsaved = new Map<string, { value: string; level: string }>()
+
 /** a masked box for a secret an agent asked for by name, and where it is kept (its space, its machine, Everywhere).
  *  The value goes once to the main machine and is never kept here, as a draft or otherwise; the agent is told it is
  *  there, by name only */
 function SecretCard({ ask, chat }: { ask: SecretAsk; chat: Chat }) {
-  const [value, setValue] = useState('')
-  const [level, setLevel] = useState(ask.levels[0]?.id ?? 'all')
+  const card = `${chat.key}:${ask.id}`
+  const kept = unsaved.get(card)
+  const [value, setValue] = useState(() => kept?.value ?? '')
+  const [level, setLevel] = useState(() => kept?.level ?? ask.levels[0]?.id ?? 'all')
+  /** what is typed stays for the screen (a card drawn away and back keeps it), and goes once it is saved */
+  const keep = (v: string, l = level) => {
+    if (v) unsaved.set(card, { value: v, level: l })
+    else unsaved.delete(card)
+    setValue(v)
+  }
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const save = async () => {
@@ -1478,7 +1514,10 @@ function SecretCard({ ask, chat }: { ask: SecretAsk; chat: Chat }) {
     try {
       const r = (await act({ type: 'secret', level, name: ask.name, value, card: { chat: chat.key, id: ask.id } })) as { ok?: boolean; error?: string }
       if (r?.ok === false) setErr(r.error ?? "That didn't go through.")
-      else setValue('')
+      else {
+        unsaved.delete(card)
+        setValue('')
+      }
     } catch {
       setErr("That didn't go through: Shepherdr can't be reached.")
     } finally {
@@ -1495,13 +1534,20 @@ function SecretCard({ ask, chat }: { ask: SecretAsk; chat: Chat }) {
         </Sent>
       ) : (
         <>
-          <SecretField label={ask.name} value={value} onChange={setValue} onEnter={save} />
+          <SecretField label={ask.name} value={value} onChange={keep} onEnter={save} />
           {ask.levels.length > 1 ? (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
               <span className="text-[0.75rem] text-fg2 phone:text-[0.8125rem]">For</span>
               <Tabs label="Where it is kept">
                 {ask.levels.map((l) => (
-                  <Tab key={l.id} on={l.id === level} onClick={() => setLevel(l.id)}>
+                  <Tab
+                    key={l.id}
+                    on={l.id === level}
+                    onClick={() => {
+                      keep(value, l.id)
+                      setLevel(l.id)
+                    }}
+                  >
                     {l.label}
                   </Tab>
                 ))}

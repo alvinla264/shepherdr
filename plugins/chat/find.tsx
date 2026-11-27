@@ -50,11 +50,17 @@ export function FindBar({ chatKey }: { chatKey: string }) {
   useEffect(() => {
     if (f) input.current?.focus({ preventScroll: true })
   }, [!!f])
-  // marks follow the words and the chat (a reply coming in, a reply opened); closed, they go
+  // marks follow the words and the chat (a reply coming in, a reply opened, a row the chat draws as it scrolls or jumps
+  // to a match: a long chat draws only the rows near what shows); closed, they go
   useEffect(() => {
     if (!f) return void highlights()?.delete('find')
-    const t = setTimeout(() => mark(chatKey, q), 60)
-    return () => clearTimeout(t)
+    const on = () => mark(chatKey, q)
+    addEventListener('shepherdr:chat-drawn', on)
+    const t = setTimeout(on, 60)
+    return () => {
+      removeEventListener('shepherdr:chat-drawn', on)
+      clearTimeout(t)
+    }
   }, [!!f, q, msgs, current])
   useEffect(() => () => void highlights()?.delete('find'), [])
   // the match being looked at comes into view; while typing, once the words settle
