@@ -14,9 +14,16 @@ export const BELOW = 40
 export class Sizes {
   private known = new Map<string, number>()
   private sum = 0
-  /** the row's height with its gap: what it last measured, or the average of what the drawn rows measured */
+  /** the row's height with its gap: what it last measured, or the average of what the drawn rows measured, counted once
+      and then kept as it was (a row walked over twice must weigh the same both times, or the places the list works out
+      for its rows stop adding up) */
   height(key: string): number {
-    return this.known.get(key) ?? (this.known.size ? this.sum / this.known.size : FIRST)
+    const was = this.known.get(key)
+    if (was !== undefined) return was
+    const first = this.known.size ? this.sum / this.known.size : FIRST
+    this.known.set(key, first)
+    this.sum += first
+    return first
   }
   /** what a drawn row measured; true when that is not what it was */
   set(key: string, height: number): boolean {
@@ -45,13 +52,17 @@ export function atTop(sizes: Sizes, keys: readonly string[], top: number, hint?:
   if (!n) return { index: 0, offset: 0 }
   let index = Math.min(Math.max(hint?.index ?? 0, 0), n - 1)
   let y = hint?.offset ?? 0
+  // up: the row above starts where this one does, less its own height
   while (index > 0 && y > top) {
     index--
     y -= sizes.height(keys[index])
   }
-  while (index < n - 1 && y + sizes.height(keys[index]) <= top) {
+  // down: the next row starts where this one ends, its height and gap later
+  while (index < n - 1) {
+    const height = sizes.height(keys[index])
+    if (y + height > top) break
+    y += height
     index++
-    y += sizes.height(keys[index])
   }
   return { index, offset: y }
 }

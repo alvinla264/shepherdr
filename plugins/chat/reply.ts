@@ -76,12 +76,13 @@ export function jumpTo(chat: string, id: string, { card = false } = {}) {
     // asked for now and then while the chat is on its way (a search hit opens it a moment before it is drawn)
     if (tries % 15 === 0) reveal(chat, id)
     const { el, box } = find()
-    if (!el) {
+    // the CLI's own question has a card and no message of its own: the card is what a jump to it shows
+    if (!el && !box) {
       // drawn in a moment (the window is opening to it), or the chat has not mounted yet: look again
       if (tries++ < 120 && document.querySelector(at)) requestAnimationFrame(land)
       return
     }
-    const anchor = box ?? el.querySelector<HTMLElement>('[data-anchor]') ?? el
+    const anchor = box ?? el?.querySelector<HTMLElement>('[data-anchor]') ?? el!
     const tall = !!box && box.offsetHeight > innerHeight * 0.7
     // the chat lets go of its bottom and leaves the scroll alone while it glides there: setting it would stop the glide
     anchor.dispatchEvent(new Event('chat-jump', { bubbles: true }))

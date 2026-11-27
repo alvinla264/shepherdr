@@ -12,16 +12,18 @@ const even = (n: number, height = 100) => {
 }
 
 describe('a row of a long chat', () => {
-  test("is measured with the gap after it, and one not drawn yet takes the average of those that were", () => {
+  test("is measured with the gap after it, and one not drawn yet takes the average of those that were, once", () => {
     const sizes = new Sizes()
-    expect(sizes.height('never')).toBe(FIRST)
+    expect(sizes.height('first')).toBe(FIRST)
     expect(sizes.set('a', 100)).toBe(true)
     expect(sizes.set('a', 100.2)).toBe(false)
     expect(sizes.set('b', 200)).toBe(true)
     expect(sizes.height('a')).toBe(100)
-    expect(sizes.height('never')).toBe(150)
+    // counted while 78, 100 and 200 were known: it keeps that, or walking the list twice would not add up
+    expect(sizes.height('first')).toBe(FIRST)
+    expect(sizes.height('other')).toBe((FIRST + 100 + 200) / 3)
     expect(sizes.set('a', 300)).toBe(true)
-    expect(sizes.height('never')).toBe(250)
+    expect(sizes.height('other')).toBe((FIRST + 100 + 200) / 3)
   })
 
   test('the gap is the chat list’s own (gap-3.5), so a spacer and the rows add up', () => {
@@ -62,6 +64,10 @@ describe('where a chat is scrolled to', () => {
     expect(offset(sizes, keys, 4)).toBe(435)
     expect(atTop(sizes, keys, 330).index).toBe(2)
     expect(atTop(sizes, keys, 329).index).toBe(1)
+    // from a hint, and from the top, the same: a row starts where the one before it ends, not where its own ends
+    expect(atTop(sizes, keys, 330, { index: 1, offset: 30 })).toEqual({ index: 2, offset: 330 })
+    expect(atTop(sizes, keys, 45, { index: 0, offset: 0 })).toEqual({ index: 1, offset: 30 })
+    expect(atTop(sizes, keys, 30, { index: 0, offset: 0 })).toEqual({ index: 1, offset: 30 })
   })
 })
 

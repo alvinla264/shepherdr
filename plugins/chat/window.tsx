@@ -35,9 +35,11 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
   const placed = useRef(false)
   /** how often the scroll moved the rows drawn: those just show, they don't rise into place (motion.ts) */
   const moved = useRef(0)
+  /** the rows this draw has already told the chat's search about, so the words it marks follow what is drawn */
+  const told = useRef('')
   // the newest message and what is just above it, or the rows around where the chat was scrolled to
   const atTail = !free || free.end > rows.length || free.start >= rows.length
-  const drawn = atTail ? { start: Math.max(0, rows.length - AT_TAIL), end: rows.length } : free
+  const drawn = atTail ? { start: Math.max(0, rows.length - AT_TAIL), end: rows.length } : { start: free.start, end: follow(free.end, rows.length) }
   const keys = rows.map((r) => r.key)
   // what the listeners read: this render's rows, and where they are drawn
   const now = useRef({ rows, keys, drawn, atTail })
@@ -63,7 +65,7 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
     at.index = drawn.start
     // what is not drawn stands in with a spacer as tall as the rows that are, less the gap that meets it
     height(top.current, at.offset - GAP)
-    height(bottom.current, baseline(sizes, keys, drawn.end) - at.offset - GAP)
+    height(bottom.current, baseline(sizes, keys, drawn.end) - GAP)
     const box = scroller.current
     // a message jumped to (a search hit, a quote, an alert's link) comes into view: drawn now, on its own, before the
     // glide that jumpTo (reply.ts) makes to centre it. What shows after that is kept still on that message
@@ -86,6 +88,12 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
       const now = a.el.offsetTop
       if (now !== a.top) box.scrollTop += now - a.top
       a.top = now
+    }
+    // the rows are new (a scroll, a jump): the words the chat's search marks go with them (find.tsx)
+    const which = `${drawn.start}:${drawn.end}`
+    if (which !== told.current) {
+      told.current = which
+      dispatchEvent(new Event('shepherdr:chat-drawn'))
     }
   })
   useEffect(() => {
@@ -150,6 +158,12 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
   out.push(<div key="window-bottom" data-window-bottom ref={bottom} aria-hidden="true" className="shrink-0" />)
   if (tail) out.push(<Fragment key="window-tail">{tail}</Fragment>)
   return <>{out}</>
+}
+
+/** where a window read from the scroll position ends, once the chat has grown at its end: a window that reached the end
+    follows it (a reply just in, the New line before it: no scroll happens to draw them otherwise) */
+function follow(end: number, rows: number) {
+  return end >= rows - 1 ? rows : end
 }
 
 /** a spacer's height: none at all when nothing is missing there, so its own gap goes too */
