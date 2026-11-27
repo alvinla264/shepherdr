@@ -7,7 +7,7 @@
 // A row's ⋯ (a mouse finds it on hover or a right click; a finger holds the row) pins it, archives it (out of every
 // list and count, into the Archived view at the bottom of the list), pauses it (To do), marks it done or deletes it.
 import clsx from 'clsx'
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   act,
   archivedIn,
@@ -39,6 +39,7 @@ import {
   shownGroups,
   taskOf,
   useSnap,
+  useSnapIn,
   useStore,
   useUI,
   type GroupBy,
@@ -127,6 +128,9 @@ function TaskRow({ t, ix, where }: { t: Task; ix: number; where?: string[] }) {
   )
 }
 
+// a row drawn again because another task changed keeps still: the same task in the same place, and where it is said
+const KeptTaskRow = memo(TaskRow, (a, b) => a.t === b.t && a.ix === b.ix && (a.where ?? []).join('\u0000') === (b.where ?? []).join('\u0000'))
+
 /** Mark done: at once when nothing would be left unmerged; else it asks first (and says why when it can't be done) */
 async function markDone(t: Task) {
   const r = await closeTask(t).catch((e: Error) => ({ ok: false, error: e.message, held: undefined }))
@@ -210,7 +214,7 @@ function ConfirmArchive() {
     confirmListeners.add(f)
     return () => void confirmListeners.delete(f)
   }, [])
-  const snap = useSnap()
+  const snap = useSnapIn(['tasks'])
   // the task as it is now: it may have stopped working while this was up
   const c = confirming
   const t = c && snap ? (snap.tasks.find((x) => x.id === c.t.id) ?? c.t) : c?.t
@@ -341,7 +345,8 @@ function noTasks(snap: Snapshot, list: ListView) {
 
 /** The lists' tasks: what their chips hold (placeId, the place picked, is for plugins of old) */
 function TaskList(_: { placeId: string }) {
-  const snap = useSnap()!
+  // only these parts are read: a chat read, automations or an artifact changing draws no list again
+  const snap = useSnapIn(['tasks', 'places', 'machines'])!
   const view = useStore((s) => listView(s.ui, snap))
   const key = view.key
   const chosen = useUI((u) => u.groups)
@@ -414,7 +419,7 @@ function TaskList(_: { placeId: string }) {
               {g.shut ? null : g.tasks.length ? (
                 <List>
                   {g.tasks.map((t) => (
-                    <TaskRow key={t.id} t={t} ix={order.indexOf(t)} where={whereOf(snap, t, g.names)} />
+                    <KeptTaskRow key={t.id} t={t} ix={order.indexOf(t)} where={whereOf(snap, t, g.names)} />
                   ))}
                 </List>
               ) : (
@@ -544,7 +549,7 @@ function DoneToggle({ more, onClick }: { more: number; onClick: () => void }) {
 
 /** At the very bottom of a list's tasks, once it has archived ones: "Archived · 12", opening them */
 function ArchivedLink({ list }: { place: Place; list?: ListView }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['tasks', 'places', 'machines'])!
   const n = list ? archivedIn(snap, list).length : 0
   if (!n) return null
   return (
@@ -564,7 +569,7 @@ function ArchivedLink({ list }: { place: Place; list?: ListView }) {
 
 /** A list's archived tasks, the latest archived first: each opens its chat; its ⋯ (or a held finger) brings it back */
 function ArchivedList({ list: view }: { list: ListView }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['tasks', 'places', 'machines'])!
   const list = archivedIn(snap, view)
   return (
     <div>
@@ -579,7 +584,7 @@ function ArchivedList({ list: view }: { list: ListView }) {
       {list.length ? (
         <List>
           {list.map((t, i) => (
-            <TaskRow key={t.id} t={t} ix={i} where={whereOf(snap, t, namesFor(view.level))} />
+            <KeptTaskRow key={t.id} t={t} ix={i} where={whereOf(snap, t, namesFor(view.level))} />
           ))}
         </List>
       ) : (
@@ -643,7 +648,7 @@ function TasksMenu(_: { place: Place }) {
 
 /** a task's pull request, small in its chat's header: a tap opens it on GitHub */
 function PrLink({ chatKey }: { chatKey: string }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['tasks'])!
   const ui = useUI()
   const pr = chatKey.includes('/') ? taskOf(snap, chatKey.split('/')[0])?.pr : undefined
   if (!pr) return null
@@ -680,7 +685,7 @@ const small = 'text-[0.8125rem] phone:text-[0.9375rem]'
  * fresh agent. Only agents add or change them, through the shepherdr command, when asked in the chat: none, no section.
  */
 function Automations({ place, list }: { place: Place; list?: ListView }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['places'])!
   // each space the chips name has its own; everything (no chips), every space's, each with its name; a machine's, none
   const all = !!list && !list.chips.length
   const spaces = !list ? [place] : all ? snap.places : list.chips.flatMap((c) => snap.places.filter((p) => p.id === c))
@@ -688,7 +693,7 @@ function Automations({ place, list }: { place: Place; list?: ListView }) {
 }
 
 function SpaceAutomations({ place, note }: { place: Place; note?: string }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['automations'])!
   const [open, setOpen] = useState<string | null>(null)
   // it folds away like the task groups above it
   const shut = useUI((u) => u.shut.includes(`${place.id}|automations`))

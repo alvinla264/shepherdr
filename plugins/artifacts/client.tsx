@@ -27,6 +27,7 @@ import {
   togglePanel,
   useDraftOf,
   useSnap,
+  useSnapIn,
   useStore,
   useUI,
 } from '@client/kernel.ts'
@@ -683,7 +684,8 @@ function Thumb({ art }: { art: Artifact }) {
 
 /** The lists' artifacts, newest first: what their chips hold (placeId, the place picked, is for plugins of old) */
 function ArtifactList(_: { placeId: string }) {
-  const snap = useSnap()!
+  // only these parts are read: a chat read or a task changing draws no artifact again
+  const snap = useSnapIn(['artifacts', 'places'])!
   const view = useStore((s) => listView(s.ui, snap))
   const open = useUI((u) => u.viewer?.artifact)
   const value = useUI((u) => u.filter[`${view.search}|artifacts`] ?? '')

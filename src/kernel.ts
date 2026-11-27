@@ -1,7 +1,8 @@
 import { actionable, attentionCounts } from './attention.ts'
 // The screen's small kernel: plugin slots, the store (server data + what's on screen), and the link to the server.
-import { useSyncExternalStore, type FC, type ReactNode } from 'react'
+import { memo, useRef, useSyncExternalStore, type FC, type ReactNode } from 'react'
 import { buildId } from '@shared/build.ts'
+import { carry, same } from '@shared/quiet.ts'
 import { expire, loadOutbox, prune, saveOutbox, settle, type Outgoing } from './outbox.ts'
 import { keptOf, mayReload, type Kept } from './reload.ts'
 import { OPEN_WITHIN, PONG_WITHIN, retryIn, SAY_LOST_AFTER } from './link.ts'
@@ -162,6 +163,12 @@ export function installPlugins(plugins: ClientPlugin[], enabled: string[], user:
   registry.composerAbove.sort(byOrder)
   registry.composerSettings.sort(byOrder)
   registry.keys.sort(byOrder)
+  // a view draws when what it reads changes, not when the frame around it happens to draw again: each is memoized, so a
+  // list or a chat is not rebuilt because its parent was. What a view reads it subscribes to itself (`useSnapIn`).
+  for (const k of Object.keys(registry.views) as (keyof Views)[]) {
+    const V = registry.views[k]
+    if (V) (registry.views as Record<string, unknown>)[k] = memo(V as FC)
+  }
 }
 
 /* ---------- what's on screen ---------- */
@@ -438,7 +445,20 @@ function lastPlace(): string | null {
 }
 
 const listeners = new Set<() => void>()
-const emit = () => listeners.forEach((l) => l())
+
+/**
+ * How many changes the screen's parts were told of, counted where the browser tests read it (window.__shepherdrTells). An
+ * idle screen is told none: the server's repeated snapshot changes nothing, so nothing is redrawn.
+ */
+function told() {
+  const w = window as Window & { __shepherdrTells?: number }
+  w.__shepherdrTells = (w.__shepherdrTells ?? 0) + 1
+}
+
+const emit = () => {
+  told()
+  listeners.forEach((l) => l())
+}
 
 export function getState() {
   return state
@@ -512,6 +532,28 @@ export function useUI<T>(pick?: (ui: UI) => T) {
   return useStore((s) => (pick ? pick(s.ui) : s.ui))
 }
 export const useSnap = () => useStore((s) => s.snap)
+
+/**
+ * The snapshot, drawn again only when one of these parts changes: `useSnapIn(['tasks', 'places'])`. Each part keeps its
+ * identity while it is unchanged (the store carries it), so a view that reads a few parts isn't drawn for the rest.
+ * The keys are fixed for the component's life.
+ */
+export function useSnapIn<K extends keyof Snapshot>(keys: readonly K[]): Snapshot | null {
+  const held = useRef<{ at: Snapshot | null; out: Snapshot | null }>({ at: null, out: null })
+  return useSyncExternalStore(subscribe, () => {
+    const snap = state.snap
+    const h = held.current
+    if (snap === h.at) return h.out
+    // another part changed, but not one this view reads: keep handing it the snapshot it already drew
+    if (snap && h.at && h.out && keys.every((k) => Object.is(snap[k], h.at![k]))) {
+      h.at = snap
+      return h.out
+    }
+    h.at = snap
+    h.out = snap
+    return snap
+  })
+}
 
 /* ---------- drafts ---------- */
 
@@ -718,8 +760,14 @@ export function connect() {
     pinging = null
     const msg = JSON.parse(ev.data) as ServerEvent
     if (msg.type === 'pong') return
+    // what arrived may be what is already on screen (a poll with nothing new, a log read twice): then nothing changes,
+    // nothing is drawn, and the store keeps the very object it had
+    const was = state
     if (msg.type === 'snapshot') {
-      state = { ...state, snap: msg.snapshot }
+      // unchanged parts keep their identity, so a list or chat reading them isn't drawn again
+      const snap = state.snap ? carry(state.snap, msg.snapshot) : msg.snapshot
+      if (snap !== state.snap) state = { ...state, snap }
+      // what is on screen is checked against the snapshot that just arrived, as before
       stayOnShown()
       fromOldPin(msg.snapshot)
       // once loaded, the first snapshot with every machine in reach says which chats are gone (one connecting or out
@@ -730,14 +778,20 @@ export function connect() {
         pruned = true
       }
     } else if (msg.type === 'chat') {
-      state = { ...state, chats: { ...state.chats, [msg.chat.key]: msg.chat } }
-      putOutbox(settle(state.outbox, msg.chat))
-    }
-    else if (msg.type === 'terminal') state = { ...state, terms: { ...state.terms, [msg.chat]: { ansi: msg.ansi, cols: msg.cols, rows: msg.rows } } }
-    else if (msg.type === 'update') state = { ...state, update: msg.update }
-    else if (msg.type === 'build' && BUILD && msg.id && msg.id !== BUILD) reloadSoon()
+      const before = state.chats[msg.chat.key]
+      const chat = before ? carry(before, msg.chat) : msg.chat
+      if (chat !== before) state = { ...state, chats: { ...state.chats, [msg.chat.key]: chat } }
+      putOutbox(settle(state.outbox, chat))
+    } else if (msg.type === 'terminal') {
+      const before = state.terms[msg.chat]
+      const screen = { ansi: msg.ansi, cols: msg.cols, rows: msg.rows }
+      const term = before ? carry(before, screen) : screen
+      if (term !== before) state = { ...state, terms: { ...state.terms, [msg.chat]: term } }
+    } else if (msg.type === 'update') {
+      if (!same(state.update, msg.update)) state = { ...state, update: msg.update }
+    } else if (msg.type === 'build' && BUILD && msg.id && msg.id !== BUILD) reloadSoon()
     if (msg.type === 'snapshot') watchVisible()
-    emit()
+    if (state !== was) emit()
   }
   sock.onclose = () => drop(sock)
 }
@@ -1230,13 +1284,21 @@ export function listOf(snap: Snapshot, chips: string[]): Omit<ListView, 'search'
   return { key: chips.length ? [...chips].sort().join('+') : '*', chips, level }
 }
 
-let lastList: { snap: Snapshot; lists: Lists; place: string; view: ListView } | null = null
+// what a list view is worked out from: the parts it reads of the snapshot, by identity. Parts keep theirs while they
+// are unchanged, so views holding different snapshots that agree on those parts share the same view, and a view keeps
+// its own object while a picker asks again (a store may only return what it returned before).
+type ListMemo = { places: Snapshot['places']; machines: Snapshot['machines']; host: string; lists: Lists; place: string; view: ListView }
+const listsMemo: ListMemo[] = []
 
 /** the lists as they show now: the same object while nothing they hang on changes, so a part can pick it */
 export function listView(ui: UI, snap: Snapshot): ListView {
-  if (lastList && lastList.snap === snap && lastList.lists === ui.lists && lastList.place === ui.place) return lastList.view
+  for (const h of listsMemo) {
+    if (h.places === snap.places && h.machines === snap.machines && h.host === snap.host && h.lists === ui.lists && h.place === ui.place) return h.view
+  }
   const view = { ...listOf(snap, listChips(ui, snap)), search: listsPinned(ui, snap) ? '*pinned' : ui.place, attention: !!placeOf(snap, ui.place).home && placeOf(snap, ui.place).machine === snap.host && !listsPinned(ui, snap) && ui.lists.at !== ui.place }
-  lastList = { snap, lists: ui.lists, place: ui.place, view }
+  listsMemo.unshift({ places: snap.places, machines: snap.machines, host: snap.host, lists: ui.lists, place: ui.place, view })
+  // a few screens' worth, not one: a view still holding a snapshot from some changes ago keeps a stable object too
+  if (listsMemo.length > 8) listsMemo.pop()
   return view
 }
 

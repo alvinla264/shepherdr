@@ -30,6 +30,7 @@ import {
   taskOf,
   togglePin,
   useSnap,
+  useSnapIn,
   useUI,
   type Pane,
 } from './kernel.ts'
@@ -73,7 +74,8 @@ import {
 } from './ui.tsx'
 
 export default function App() {
-  const snap = useSnap()
+  // what the frame and its lists read: a change to anything else (a chat read, automations) draws none of it again
+  const snap = useSnapIn(['places', 'machines', 'tasks', 'asks', 'attentionRequests'])
   const device = useUI((u) => u.device)
   const search = useUI((u) => u.search)
   const keyboard = useUI((u) => u.keyboard)
@@ -146,7 +148,7 @@ function useKeyboard() {
 /* ---------- pieces of the frame ---------- */
 
 export function Brand() {
-  const snap = useSnap()!
+  const snap = useSnapIn(['name'])!
   const Menu = registry.views.placesMenu
   return (
     <div className="flex items-center gap-2 px-3.5 pt-3 pb-0.5 text-[0.9375rem] font-semibold desktop:pr-2.5 phone:px-5 phone:pt-3 phone:pb-1 phone:text-[1.125rem]">
@@ -293,7 +295,7 @@ function PlaceMarks({ place }: { place: Place }) {
 
 /** The coordinator chat in the middle; a container (named place) so its header can fit what it shows to its width */
 function PlaceColumn({ place, pane }: { place: Place; pane?: number }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['places', 'machines'])!
   const Chat = registry.views.chat
   return (
     <section data-drawer-from className="@container/place flex min-h-0 min-w-0 flex-1 flex-col">
@@ -373,7 +375,7 @@ function PinButton() {
 
 /** Task requests in the panel’s scope, excluding coordinator requests. */
 function TaskAttention() {
-  const snap = useSnap()!
+  const snap = useSnapIn(['places', 'tasks', 'asks', 'attentionRequests'])!
   const view = useStore((s) => listView(s.ui, snap))
   const ids = snap.places.filter((p) => !view.chips.length || view.chips.includes(p.id) || view.chips.includes(`m:${p.machine}`)).map((p) => p.id)
   const c = attentionCounts({ ...snap, asks: {}, attentionRequests: { ...snap.attentionRequests, ...Object.fromEntries(snap.places.map((p) => [p.chat, []])) } }, ids)
@@ -427,7 +429,7 @@ function SideList({ snap }: { snap: Snapshot }) {
 /** An open task is its one agent's chat; until its agent starts there is no chat yet. In the middle (the lists pinned),
  *  it has what the place's chat there has to bring places back. */
 function TaskPage({ task, middle, pane }: { task: Task; middle?: boolean; pane?: number }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['places', 'machines'])!
   const g = task.agent ?? null
   const Chat = registry.views.chat
   const finished = useStore((s) => s.chats[g?.chat ?? '']?.finished)
@@ -612,7 +614,7 @@ function PaneButtons({ i }: { i: number }) {
 
 /** a space's tasks in a pane */
 function TasksPane({ place, i }: { place: Place; i: number }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['places', 'machines'])!
   const Tasks = registry.views.tasks
   const TasksMenu = registry.views.tasksMenu
   return (
@@ -631,7 +633,7 @@ function TasksPane({ place, i }: { place: Place; i: number }) {
 
 /** an artifact in a pane, at its latest */
 function ArtifactPane({ id, i }: { id: string; i: number }) {
-  const snap = useSnap()!
+  const snap = useSnapIn(['artifacts', 'places'])!
   const art = snap.artifacts?.find((a) => a.id === id)
   const View = registry.views.artifact
   if (!art) return <GonePane i={i} what="This artifact is gone." />

@@ -117,6 +117,8 @@ describe('alerts', () => {
     const got: { type: string }[] = []
     ws.onmessage = (e) => got.push(JSON.parse(String(e.data)))
     await new Promise((r) => (ws.onopen = r))
+    // a screen on view, as the app says it is when it opens; a test says otherwise below when it means a hidden one
+    ws.send(JSON.stringify({ type: 'watch', chats: [], term: null, visible: true }))
     return { ws, got }
   }
   const settle = () => new Promise((r) => setTimeout(r, 50))

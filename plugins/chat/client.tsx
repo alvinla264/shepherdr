@@ -1188,7 +1188,8 @@ function PrOnCard({ pr, className }: { pr: { number: number; url: string }; clas
   )
 }
 
-/** drawn again only when its chat, what you sent or the New line changes: never as you type */
+/** drawn again only when its messages, what you sent or the New line changes: never as you type, and never for the
+ *  agent's state alone (the rows below the messages follow that themselves) */
 const Messages = memo(function Messages({ chat, from }: { chat: Chat; from: string }) {
   const outbox = useStore((s) => s.outbox)
   type Item = { at: number; msg: Message; out?: Outgoing; last?: boolean } | { at: number; album: Message[]; out?: Outgoing; last?: boolean }
@@ -1257,13 +1258,22 @@ const Messages = memo(function Messages({ chat, from }: { chat: Chat; from: stri
         list={list}
         rows={rows}
         draw={draw}
-        tail={registry.chatTail.map(({ View }, i) => (
-          <View key={i} chat={chat} from={from} />
-        ))}
+        tail={<ChatTails chatKey={chat.key} from={from} />}
       />
     </div>
   )
-})
+},
+  // a chat whose messages did not change keeps its built rows and where they were scrolled: what is under them (the
+  // agent working, what it runs in the background) follows the chat itself, in ChatTails
+  (a, b) => a.from === b.from && a.chat.key === b.chat.key && a.chat.messages === b.chat.messages,
+)
+
+/** the rows under a chat's messages (its agent working, what it runs in the background): drawn again as the chat
+ *  changes, without the messages above them being built again */
+function ChatTails({ chatKey, from }: { chatKey: string; from: string }) {
+  const chat = useChat(chatKey)
+  return <>{chat ? registry.chatTail.map(({ View }, i) => <View key={i} chat={chat} from={from} />) : null}</>
+}
 
 /** while the agent works, the step it is on in one quiet line; three soft dots in the agent's bubble (like iMessage) where
  *  its log says nothing of its turn */

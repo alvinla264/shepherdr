@@ -24,7 +24,7 @@
 // Alt+↑/↓ (Option on a Mac) goes to the space above or below as they show, from anywhere.
 import clsx from 'clsx'
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type LiHTMLAttributes, type ReactNode } from 'react'
-import { act, counts, definePlugin, getState, goPlace, manyMachines, openSplit, placeOf, removeSpace, setUI, splitClick, useSnap, useUI, type Pane, type UI } from '@client/kernel.ts'
+import { act, counts, definePlugin, getState, goPlace, manyMachines, openSplit, placeOf, removeSpace, setUI, splitClick, useSnap, useSnapIn, useUI, type Pane, type UI } from '@client/kernel.ts'
 import { and, Dialog, RowMenu, RowMenuButton, useRowMenu } from '@client/rowmenu.tsx'
 import { BackIcon, BellIcon, BellSlashIcon, AttentionBadge, DeleteIcon, DownIcon, HashIcon, ic, IconButton, List, MenuItem, MenuLabel, MenuSeparator, MenuSetting, Meta, NextIcon, PinnedIcon, PinTaskIcon, PlusIcon, Primary, ReadIcon, RemoveProjectIcon, RenameIcon, rowClass, RowText, SectionIcon, ServerIcon, SplitIcon, TasksIcon, UnpinIcon } from '@client/ui.tsx'
 import { MarkRead, markPlaceRead, muted, placeUnread } from '@client/unread.ts'
@@ -927,7 +927,9 @@ function stepPlace(e: KeyboardEvent, ui: UI, snap: Snapshot) {
 }
 
 function Places() {
-  const snap = useSnap()!
+  // what the rows read: machines and sections, their tasks' counts, unread, and Notify; an artifact or an automation
+  // changing draws none of it again
+  const snap = useSnapIn(['places', 'machines', 'sections', 'tasks', 'asks', 'attentionRequests', 'last', 'read', 'settings'])!
   const place = useUI((u) => u.place)
   const fold = useFolded()
   const mine = usePending()
