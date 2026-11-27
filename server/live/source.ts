@@ -44,7 +44,7 @@ import { asMode, HOME_SPACE, HOST, NAME, placeId, Places } from './places.ts'
 import { privatePrompt, coordinatorPrompt, relaunchedLine, restartLine, resumedLine, settingsBlock } from './prompts.ts'
 import { fitHarness, harnessProblem, harnessWords, recentChat, restartHint, restartInfo, type Harness } from './restart.ts'
 import { Revivals, type Wrong } from './revive.ts'
-import type { PaneState } from './pane.ts'
+import { missingWords, type PaneState } from './pane.ts'
 import { carryOn, Retries, type Retry } from './retry.ts'
 import { CATALOG, CLI_NAME, CLIS, kindOf, refuse, setForTask, repositorySection, Settings, type Level } from './settings.ts'
 import { startVoice } from './voice.ts'
@@ -1351,8 +1351,11 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     void this.reviveNow(key).catch(() => undefined)
   }
 
-  /** an agent started again at once, because a message met the pane without it: once per try, never in a loop */
+  /** A coordinator started again at once, because a message met the pane without it: once per try, never in a loop.
+   *  A task's agent waits for its task instead: it comes back when the task is restarted or told to go, and what waited
+   *  for it goes in with the first message that launch brings (agents.ts). */
   private async reviveNow(key: string) {
+    if (key.includes('/')) return
     if (this.reviving.has(key) || !this.keepsRunning(key)) return
     if (!this.agents.reachable || Date.now() - this.agents.lastReach > 10_000) return
     const why = await this.agents.wrong(key)
@@ -2144,6 +2147,13 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     if (open && (qid === open.id || qid.startsWith(`${open.id}:`)) && this.chats.log(key).answers[qid] === undefined) {
       const idx = qid === open.id ? undefined : qid.slice(open.id.length + 1)
       const item = open.items[Number(idx ?? 0)]
+      // the question is only on that CLI's screen: if its pane no longer holds the agent there is nothing to answer,
+      // and the card stays answerable rather than being marked answered with nothing typed for it
+      const pane = await this.agents.paneOf(key)
+      if (pane?.state !== 'agent') {
+        this.missingAgent(key, pane?.state ?? 'gone')
+        return { ok: false, error: missingWords(key, pane?.state ?? 'gone', pane?.program) }
+      }
       // noted before the keys go in: a second tap meanwhile (the app and an alert's button) is refused
       this.chats.answer(key, qid, a.choice, a.other, space)
       const keys: string[] = []

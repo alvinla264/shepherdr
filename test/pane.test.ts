@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { paneProgram, paneState } from '../server/live/pane.ts'
 
 process.env.SHEPHERDR_HOME = mkdtempSync(join(tmpdir(), 'shep-pane-'))
-const { Agents } = await import('../server/live/agents.ts')
+const { Agents, hidden, launchOpening } = await import('../server/live/agents.ts')
 type ProcessInfo = import('../server/live/herdr.ts').ProcessInfo
 
 /** a process in the pane's foreground, as herdr reports it */
@@ -105,12 +105,20 @@ describe('nothing is typed into a pane that is not the agent', () => {
     const sent = await a.send(key, 'Rename it to boards.')
     expect(typed).toEqual([])
     expect(sent).toMatchObject({ waiting: true, waitsFor: 'start' })
-    expect(a.waiting(key).map((o) => o.text)).toEqual(['Rename it to boards.'])
-    // the agent is back on its conversation: what waited goes in, after the first message the launch brings
-    const next = nextAgent(a.waiting(key))
-    ;(next.b as unknown as { queue: (key: string, texts: string[], ahead?: boolean) => void }).queue(next.key, ['Carrying on.'], true)
+    const waited = a.waiting(key)
+    expect(waited.map((o) => o.text)).toEqual(['Rename it to boards.'])
+    // it waits for the pane, with no deadline
+    expect(waited[0].awaitsAgent).toBe(true)
+    // the next launch: what waited is read before what the launch itself tells it, after the instructions a CLI takes
+    // no flag for, and it keeps its own bubble
+    expect(launchOpening('<instructions>', waited, 'Carrying on.').map((o) => (typeof o === 'string' ? o : o.text))).toEqual([
+      '<instructions>',
+      'Rename it to boards.',
+      'Carrying on.',
+    ])
+    const next = nextAgent(waited)
     await next.b.deliver(next.key)
-    expect(next.typed).toEqual(['message: Carrying on.', 'message: Rename it to boards.'])
+    expect(next.typed).toEqual(['message: Rename it to boards.'])
   }, 20_000)
 
   test('words meant for the agent are held, the next run gets them; a keypress is refused', async () => {
@@ -133,12 +141,38 @@ describe('nothing is typed into a pane that is not the agent', () => {
     expect(typed).toEqual([])
   })
 
-  test('a message whose pane cannot be looked at is refused, not typed blind', async () => {
+  test('out of reach, herdr did not say: the message is refused, not typed blind', async () => {
+    const { a, key, typed } = oneAgent(async () => {
+      throw new Error('pane.process_info: no such socket')
+    })
+    a.reachable = false
+    a.lastReach = 0
+    await expect(a.send(key, 'hello', { cid: 'c1' })).rejects.toThrow("didn't say what runs in it")
+    expect(typed).toEqual([])
+  })
+
+  test('a pane herdr answers about and no longer has is gone: what you sent waits for the next agent', async () => {
     const { a, key, typed } = oneAgent(async () => {
       throw new Error('pane.process_info: no such pane')
     })
-    await expect(a.send(key, 'hello', { cid: 'c1' })).rejects.toThrow("didn't say what runs in it")
+    expect(await a.send(key, 'hello')).toMatchObject({ waiting: true, waitsFor: 'start' })
     expect(typed).toEqual([])
+    expect(a.waiting(key)[0]).toMatchObject({ text: 'hello', awaitsAgent: true })
+  })
+
+  test('what waits for a pane waits as long as it takes: no deadline fails it', async () => {
+    const { a, key } = oneAgent(async () => shellAtPrompt())
+    a.unreadyFor = 0
+    await a.send(key, 'still here', { cid: 'c12' })
+    await a.deliver(key)
+    expect(a.waiting(key).some((o) => o.cid === 'c12')).toBe(true)
+    expect(a.failedLately(key)).toEqual([])
+  })
+
+  test('a tell meant for an agent whose pane runs another program is refused, not queued for later', async () => {
+    const { a, key } = oneAgent(async () => vim)
+    await expect(a.send(key, hidden('SHE-9 is ready.', 'news'))).rejects.toThrow('running vim, not the agent')
+    expect(a.waiting(key)).toEqual([])
   })
 
   test('as before, an agent in its pane takes what is meant for it', async () => {

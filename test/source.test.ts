@@ -845,22 +845,54 @@ describe('what you send shows at once', () => {
       src.agents.status = status
     }
   }
+  /** its agent in its pane, as herdr would have it: the chat's CLI in the pane's foreground (there is no herdr here) */
+  const inPane = (name: string) => {
+    const agents = src.agents
+    const kind = agents.records[chat]?.kind ?? 'claude'
+    const info = agents.panes.info
+    agents.live.set(name, { agent: kind, agent_status: 'idle', cwd: '/x', name, pane_id: `pane-${name}`, tab_id: 't', workspace_id: 'w' })
+    agents.panes.info = async () => ({ shell_pid: 1, foreground_process_group_id: 2, foreground_processes: [{ pid: 2, name: kind, argv: [kind] }] })
+    return () => {
+      agents.live.delete(name)
+      agents.panes.info = info
+    }
+  }
   test("an agent that won't start, or won't take it, is an error the screen shows, not a wait", async () => {
     // what earlier tests left waiting
     src.agents.outbox = src.agents.outbox.filter((o) => o.key !== chat)
     // herdr isn't running here: the agent can't be started
     await expect(src.act({ type: 'send', chat, text: 'Hello?', cid: 'c0' })).rejects.toThrow(/herdr|agent/)
-    // ready, but typing it in fails
-    await as('idle', async () => {
-      await expect(src.act({ type: 'send', chat, text: 'Hello?', cid: 'c0' })).rejects.toThrow("The agent didn't take it")
-    })
-    expect(src.agents.waiting(chat).some((o) => o.cid === 'c0')).toBe(false)
+    // ready, in its pane, but typing it in fails
+    const agents = src.agents
+    const record = agents.records[chat]
+    agents.records[chat] = { ...(record ?? {}), key: chat, name: 'nearly' } as (typeof agents.records)[string]
+    const done = inPane('nearly')
+    try {
+      await as('idle', async () => {
+        await expect(src.act({ type: 'send', chat, text: 'Hello?', cid: 'c0' })).rejects.toThrow("The agent didn't take it")
+      })
+      expect(agents.waiting(chat).some((o) => o.cid === 'c0')).toBe(false)
+    } finally {
+      done()
+      if (record) agents.records[chat] = record
+      else delete agents.records[chat]
+    }
   })
   test('one that waited and then could not go in fails in the chat; sent again, it is on its way once more', async () => {
     src.agents.outbox = src.agents.outbox.filter((o) => o.key !== chat)
     expect(await as('blocked', () => src.act({ type: 'send', chat, text: 'Later', cid: 'c9' }))).toMatchObject({ waiting: true })
     // the agent is ready, but typing it in fails
-    await as('idle', () => src.agents.deliver(chat))
+    const agents = src.agents
+    const record = agents.records[chat]
+    agents.records[chat] = { ...(record ?? {}), key: chat, name: 'later' } as (typeof agents.records)[string]
+    const done = inPane('later')
+    try {
+      await as('idle', () => agents.deliver(chat))
+    } finally {
+      done()
+      if (record) agents.records[chat] = record
+      else delete agents.records[chat]
+    }
     const c = src.chats.chat(chat)
     expect(c.messages.some((m) => m.cid === 'c9')).toBe(false)
     expect(c.failed).toEqual([{ cid: 'c9', error: expect.stringContaining("The agent didn't take it") }])
@@ -952,6 +984,7 @@ describe('what you send shows at once', () => {
     const prompt = herdr.prompt
     const record = agents.records[chat]
     agents.records[chat] = { ...(record ?? {}), key: chat, name: 'held' } as (typeof agents.records)[string]
+    const done = inPane('held')
     let typed = 0
     let let_go!: () => void
     herdr.prompt = (async () => {
@@ -972,6 +1005,7 @@ describe('what you send shows at once', () => {
       })
     } finally {
       herdr.prompt = prompt
+      done()
       if (record) agents.records[chat] = record
       else delete agents.records[chat]
     }
@@ -983,6 +1017,7 @@ describe('what you send shows at once', () => {
     const prompt = herdr.prompt
     const record = agents.records[chat]
     agents.records[chat] = { ...(record ?? {}), key: chat, name: 'steer' } as (typeof agents.records)[string]
+    const done = inPane('steer')
     const typed: string[] = []
     let menu = false
     herdr.prompt = (async (_name: string, text: string) => {
@@ -1026,6 +1061,7 @@ describe('what you send shows at once', () => {
       }
     } finally {
       herdr.prompt = prompt
+      done()
       if (record) agents.records[chat] = record
       else delete agents.records[chat]
       agents.outbox = agents.outbox.filter((o) => o.key !== chat)
@@ -1038,6 +1074,7 @@ describe('what you send shows at once', () => {
     const status = agents.status
     const record = agents.records[chat]
     agents.records[chat] = { ...(record ?? {}), key: chat, name: 'fresh' } as (typeof agents.records)[string]
+    const done = inPane('fresh')
     // gone until it is started; then herdr lists it, but doesn't count it as its named agent yet
     let st = 'gone'
     let ready = false
@@ -1085,6 +1122,7 @@ describe('what you send shows at once', () => {
     } finally {
       herdr.prompt = prompt
       agents.status = status
+      done()
       if (record) agents.records[chat] = record
       else delete agents.records[chat]
       agents.outbox = agents.outbox.filter((o) => o.key !== chat)

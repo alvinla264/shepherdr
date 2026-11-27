@@ -45,5 +45,13 @@ export class PaneMissing extends Error {
   }
 }
 
+/** why nothing was typed into a chat's pane, in plain words: the chat shows them under what you sent */
+export function missingWords(chat: string, state: PaneState | 'unknown', program?: string): string {
+  if (state === 'other') return `${chat}'s terminal is running ${program ?? 'another program'}, not the agent.`
+  if (state === 'shell') return `${chat}'s terminal is at a shell, not the agent.`
+  if (state === 'unknown') return `${chat}'s terminal didn't say what runs in it, so nothing was typed.`
+  return `${chat}'s agent isn't running.`
+}
+
 /** a shell or no pane is looked for again once the agent is back; another program is left to the human */
 export const waitsForAgent = (e: unknown) => e instanceof PaneMissing && (e.state === 'shell' || e.state === 'gone')
