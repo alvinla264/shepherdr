@@ -544,6 +544,8 @@ describe('choice cards', () => {
       expect(await src.act({ type: 'answer', chat, question: blank.id, choice: -1, parts: [] })).toMatchObject({ ok: false })
       expect(src.chats.log(chat).answers[blank.id]).toBeUndefined()
       expect(said.length).toBe(1)
+      // and it answers once one question is picked, so no other test's card is hidden behind it
+      expect(await src.act({ type: 'answer', chat, question: blank.id, choice: -1, parts: [{ choice: 0 }] })).toMatchObject({ ok: true })
       // a card of several is always answered together with Send: one that claims one-tap is refused
       expect((await src.cli(['ask', 'Release prep', '--ordinary', '--question', 'Which branch?', '--choice', 'main', '--choice', 'next'], { chat })).code).toBe(1)
       // a --choice belongs to the --question before it
