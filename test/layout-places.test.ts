@@ -1,7 +1,7 @@
 // The sidebars and places: modes, the ⋯ menu, the places tree, one machine or many, in a real browser (layout.ts).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Page } from 'playwright-core'
-import { layout, settled, type Box } from './layout.ts'
+import { layout, settled, slotIs, widthIs, widthOf, type Box } from './layout.ts'
 
 const { browser, world, server, url } = await layout()
 
@@ -16,46 +16,44 @@ async function quietProject() {
 }
 
 describe.skipIf(!browser)('sidebars', () => {
-  const width = (page: import('playwright-core').Page, sel: string) => page.$eval(sel, (el) => Math.round(el.getBoundingClientRect().width))
   const places = '#places'
   const tasks = 'section[aria-label="Tasks"]'
   /** drags a separator's middle by dx */
   const drag = async (page: import('playwright-core').Page, name: string, dx: number) => {
+    // nothing still sliding under the edge about to be pressed: the pointer goes where the screen is now
+    await settled(page)
     const b = (await page.getByRole('separator', { name }).boundingBox())!
     await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2)
     await page.mouse.down()
     await page.mouse.move(b.x + b.width / 2 + dx, b.y + b.height / 2, { steps: 6 })
     await page.mouse.up()
   }
-  const settled = (page: import('playwright-core').Page) => page.waitForTimeout(350)
 
   test('drag an inner edge to resize, double-click to reset; this device remembers (desktop)', async () => {
     const page = await browser!.newPage({ viewport: { width: 1440, height: 800 } })
     await page.goto(url())
     await page.getByRole('separator', { name: 'Resize places' }).waitFor()
-    expect(await width(page, places)).toBe(260)
-    expect(await width(page, tasks)).toBe(400)
+    await slotIs(page, places, 260)
+    await widthIs(page, tasks, 400)
     await drag(page, 'Resize places', 80)
     await drag(page, 'Resize tasks', -100)
-    expect(await width(page, places)).toBe(340)
-    expect(await width(page, tasks)).toBe(500)
+    await slotIs(page, places, 340)
+    await widthIs(page, tasks, 500)
     // no wider than their max, and the chat keeps its room
     await drag(page, 'Resize places', 400)
-    expect(await width(page, places)).toBe(400)
+    await slotIs(page, places, 400)
     // the arrow keys resize a focused edge
     await page.getByRole('separator', { name: 'Resize tasks' }).focus()
     await page.keyboard.press('ArrowLeft')
-    await settled(page)
-    expect(await width(page, tasks)).toBe(516)
+    await widthIs(page, tasks, 516)
     await page.reload()
     await page.getByRole('separator', { name: 'Resize places' }).waitFor()
-    expect(await width(page, places)).toBe(400)
-    expect(await width(page, tasks)).toBe(516)
+    await slotIs(page, places, 400)
+    await widthIs(page, tasks, 516)
     await page.getByRole('separator', { name: 'Resize places' }).dblclick()
     await page.getByRole('separator', { name: 'Resize tasks' }).dblclick()
-    await settled(page)
-    expect(await width(page, places)).toBe(260)
-    expect(await width(page, tasks)).toBe(400)
+    await slotIs(page, places, 260)
+    await widthIs(page, tasks, 400)
     await page.close()
   }, 30_000)
 
@@ -65,11 +63,10 @@ describe.skipIf(!browser)('sidebars', () => {
     const hide = page.getByRole('button', { name: 'Hide Places' })
     const show = page.getByRole('button', { name: 'Show Places' })
     await drag(page, 'Resize places', 60)
-    expect(await width(page, places)).toBe(320)
+    await slotIs(page, places, 320)
     // the toggle at the top of places; hidden, the chat's header keeps the place's name and the toggle
     await hide.click()
-    await settled(page)
-    expect(await page.$eval(places, (n) => n.parentElement!.getBoundingClientRect().width)).toBe(0)
+    await slotIs(page, places, 0)
     expect(await page.$eval(places, (n) => n.parentElement!.inert)).toBe(true)
     expect(await page.getByRole('separator', { name: 'Resize places' }).count()).toBe(0)
     expect(await page.locator('section').first().getByText('home', { exact: true }).isVisible()).toBe(true)
@@ -78,23 +75,22 @@ describe.skipIf(!browser)('sidebars', () => {
     // focus follows the toggle to its other spot
     expect(await show.evaluate((b) => b === document.activeElement)).toBe(true)
     await show.click()
-    await settled(page)
-    expect(await width(page, places)).toBe(320)
+    await slotIs(page, places, 320)
     // ⌘B (Ctrl+B) works while typing too
     await page.getByRole('textbox', { name: /Message/ }).focus()
     await page.keyboard.press('Control+b')
-    await settled(page)
+    await show.waitFor()
     expect(await show.isVisible()).toBe(true)
     await page.keyboard.press('Control+b')
-    await settled(page)
+    await hide.waitFor()
     expect(await hide.isVisible()).toBe(true)
     // dragged narrow enough, it snaps shut; it stays shut after a reload
     await drag(page, 'Resize places', -200)
-    await settled(page)
+    await slotIs(page, places, 0)
     expect(await show.isVisible()).toBe(true)
     await page.reload()
     await show.waitFor()
-    expect(await page.$eval(places, (n) => n.parentElement!.getBoundingClientRect().width)).toBe(0)
+    await slotIs(page, places, 0)
     // the sidebar's foot holds Settings alone
     expect(await page.getByText('Keyboard', { exact: true }).count()).toBe(0)
     // and Settings' Keyboard shortcuts lists the key: ? opens it there and shuts it again
@@ -105,8 +101,7 @@ describe.skipIf(!browser)('sidebars', () => {
     await page.keyboard.press('?')
     expect(await settings.count()).toBe(0)
     await show.click()
-    await settled(page)
-    expect(await width(page, places)).toBe(320)
+    await slotIs(page, places, 320)
     await page.close()
   }, 30_000)
 
@@ -174,9 +169,9 @@ describe.skipIf(!browser)('sidebars', () => {
     await tablet.getByRole('separator', { name: 'Resize tasks' }).waitFor()
     expect(await tablet.getByRole('separator', { name: 'Resize places' }).count()).toBe(0)
     expect(await tablet.getByRole('button', { name: /^(Hide|Show) Places$/ }).count()).toBe(0)
-    const before = await width(tablet, tasks)
+    const before = await widthOf(tablet, tasks)
     await drag(tablet, 'Resize tasks', -40)
-    expect(await width(tablet, tasks)).toBe(Math.min(before + 40, 900 - 480))
+    await widthIs(tablet, tasks, Math.min(before + 40, 900 - 480))
     await tablet.close()
     const phone = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
     await phone.goto(url())
