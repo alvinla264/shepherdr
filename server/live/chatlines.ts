@@ -8,6 +8,8 @@
 //   <reaction from="Elias" emoji="👍" title="Weekly board" artifact="wk3n" version="2"/>   (an artifact card)
 //   <attachment from="Elias" name="screenshot.png" path="~/inbox/screenshot.png"/>
 //   <answer from="Elias" question="Rerun CI on main?">Rerun it</answer>
+//   <answer from="Elias" question="Which branch?" card="Release prep">main</answer>   (one per question of a card
+//    that asked several, card the title it asked them under)
 //   <artifact-sent from="Elias" title="Weekly board" artifact="wk3n" version="2">Pinned colour: Accent</artifact-sent>
 //   <artifact-comment from="Elias" title="Weekly board" artifact="wk3n" version="2">Make the bars blue</artifact-comment>
 //   <artifact-note from="Elias" title="Weekly board" artifact="wk3n" version="2" on="“Send” (button.primary in Board)">Make it say “Send event”.</artifact-note>
@@ -56,7 +58,8 @@ export const line = {
   reactArtifact: (user: string, emoji: string, art: Art) => tag('reaction', { from: user, emoji, ...art }),
   unreactArtifact: (user: string, emoji: string, art: Art) => tag('reaction-removed', { from: user, emoji, ...art }),
   attach: (user: string, name: string, path: string) => tag('attachment', { from: user, name, path }),
-  answer: (user: string, title: string, answer: string) => tag('answer', { from: user, question: title }, answer),
+  /** an answer to one question; card: the title of the card it was asked on, when that card asked several */
+  answer: (user: string, title: string, answer: string, card?: string) => tag('answer', { from: user, question: title, card }, answer),
   /** a secret you gave, by its name and where it is kept: never its value */
   secret: (user: string, name: string, where: string) => tag('secret', { from: user, name, for: where }),
   artifact: (title: string, id: string, v: number): Art => ({ title, artifact: id, version: v }),
@@ -99,7 +102,7 @@ export type Parsed =
   | { kind: 'react'; emoji: string; to: string; path?: string; artifact?: ArtifactPost }
   | { kind: 'unreact'; emoji: string; to: string; path?: string; artifact?: ArtifactPost }
   | { kind: 'attach'; name: string; path: string }
-  | { kind: 'answer'; title: string; answer: string }
+  | { kind: 'answer'; title: string; answer: string; card?: string }
   | { kind: 'secret'; name: string; where: string }
   | { kind: 'artifact-send'; title: string; text: string }
   | { kind: 'artifact-say'; title: string; text: string }
@@ -146,7 +149,7 @@ export function parseUserLine(l: string): Parsed | null {
     const { a, body = '' } = t
     if ((t.name === 'reaction' || t.name === 'reaction-removed') && a.emoji) return { kind: t.name === 'reaction' ? 'react' : 'unreact', emoji: a.emoji, ...quoteOf(a) }
     if (t.name === 'attachment' && a.path) return { kind: 'attach', name: a.name ?? a.path.split('/').pop()!, path: a.path }
-    if (t.name === 'answer') return { kind: 'answer', title: a.question ?? '', answer: body }
+    if (t.name === 'answer') return { kind: 'answer', title: a.question ?? '', answer: body, card: a.card }
     if (t.name === 'secret' && a.name) return { kind: 'secret', name: a.name, where: a.for ?? '' }
     if (t.name === 'artifact-sent') return { kind: 'artifact-send', title: a.title ?? '', text: body }
     if (t.name === 'artifact-comment') return { kind: 'artifact-say', title: a.title ?? '', text: body }
@@ -174,9 +177,11 @@ export function userLines(text: string): string[] {
   const lines = text.split('\n')
   const out: string[] = []
   for (let i = 0; i < lines.length; i++) {
-    const open = lines[i].trim().match(LONG)
-    // its last closing tag: the words may hold one of their own
-    const close = open && lines.findLastIndex((l, j) => j >= i && l.trimEnd().endsWith(`</${open[1]}>`))
+    const line = lines[i].trim()
+    const open = line.match(LONG)
+    // one that opens and closes on its own line is whole (two answers, or two notes, in one message); one that does not
+    // may run over several lines, to its last closing tag: the words may hold one of their own
+    const close = open && !line.endsWith(`</${open[1]}>`) && lines.findLastIndex((l, j) => j >= i && l.trimEnd().endsWith(`</${open[1]}>`))
     if (close && close > i && tagOf(lines.slice(i, close + 1).join('\n').trim())) {
       out.push(lines.slice(i, close + 1).join('\n'))
       i = close

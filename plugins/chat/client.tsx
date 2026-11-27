@@ -8,7 +8,7 @@ import { keyOf, partsOf, priorOf, reasonOf, SEND_TIMEOUT, type Outgoing } from '
 import { AlertIcon, BackIcon, CameraIcon, CheckIcon, Count, DeleteIcon, dimmed, Dot, DownIcon, DownloadIcon, Empty, field, FileIcon, ic, IconButton, KeyIcon, LinkButton, LiveWave, MachineIcon, Menu, MenuItem, MenuSeparator, MenuSetting, MicIcon, ModeIcon, MoreIcon, NextIcon, PageIcon, PlanIcon, PlusIcon, Primary, QuestionIcon, ReplyIcon, RestartIcon, roundBtn, SearchIcon, SecretField, Sent, SmileIcon, Tab, Tabs, TextBox, UpIcon, useElapsed, XIcon } from '@client/ui.tsx'
 import { canDictate, dictate, dictSample, type Dictation } from '@client/dictation.ts'
 import { extOf, isImage } from '@shared/files.ts'
-import { modeName, type CardAsk, type Chat, type Message, type Place, type Question, type ReplyQuote, type SecretAsk, type UpdateCard } from '@shared/types.ts'
+import { modeName, type CardAsk, type Chat, type Message, type Place, type Question, type QuestionPart, type ReplyQuote, type SecretAsk, type UpdateCard } from '@shared/types.ts'
 import { buzz, mine, openBar, openPicker, quick, react } from '@plugins/reactions/client.tsx'
 import { EDGE } from '@client/gestures.ts'
 import { still } from '@client/motion.ts'
@@ -1323,7 +1323,192 @@ function answeredHow(q: Question) {
 const noteBox = clsx('min-h-10 w-full resize-none rounded-row bg-transparent px-3 py-[9px] placeholder:text-fg3 coarse:min-h-11 phone:min-h-11 phone:text-[1rem]', field)
 
 /** space: a copy of a task's question on its needs-you card in that space's chat, answered there */
-export function QuestionCard({ q, chat, msg, from, space, source }: { q: Question; chat: Chat; msg: string; from: string; space?: string; source?: CardSource }) {
+type CardProps = { q: Question; chat: Chat; msg: string; from: string; space?: string; source?: CardSource }
+
+/** a question's card: several questions answered together, or the one it asks */
+export function QuestionCard(p: CardProps) {
+  return p.q.parts ? <PartsCard {...p} /> : <SingleCard {...p} />
+}
+
+/** the pick box on a choice: a checkbox when several may be picked, a radio for one */
+const pickBox = (multi?: boolean) =>
+  clsx('size-4 shrink-0 shadow-[inset_0_0_0_1.5px_var(--fg3)] group-aria-pressed:shadow-[inset_0_0_0_5px_var(--fg)]', multi ? 'rounded-[4px]' : 'rounded-full')
+
+/** the picks kept on each question of a card that asks several, while the screen is */
+const chosenParts = new Map<string, number[]>()
+
+/** the typed answers a card of several keeps as a draft, by question; a half-written or old one reads as none */
+function typedAnswers(draft: string): Record<string, string> {
+  try {
+    const v = draft ? (JSON.parse(draft) as unknown) : {}
+    return v && typeof v === 'object' ? (v as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** what one question of a card that asked several was answered with: its words, its picks, or that it was left blank */
+function partAnswer(part: QuestionPart) {
+  if (part.said) return part.said
+  const picks = part.picks?.length ? part.picks : part.sent === undefined ? [] : [part.sent]
+  const labels = picks.map((j) => part.choices[j]?.label).filter(Boolean).join(', ')
+  return labels || (part.optional ? 'Left blank' : 'Not answered')
+}
+
+/** a card that asks several questions at once: each with its own choices and typed answer, then one note and one Send.
+ *  Every question is required, unless the card marks it Optional. */
+function PartsCard({ q, chat, msg, from, space, source }: CardProps) {
+  const parts = q.parts ?? []
+  const picks = `${chat.key}:${q.id}`
+  const [sel, setPicked] = useState<number[][]>(() => parts.map((_, i) => chosenParts.get(`${picks}:${i}`) ?? []))
+  const setSel = (i: number, next: number[]) => {
+    if (next.length) chosenParts.set(`${picks}:${i}`, next)
+    else chosenParts.delete(`${picks}:${i}`)
+    setPicked((all) => all.map((x, j) => (j === i ? next : x)))
+  }
+  // the note at the card's foot, and the typed answers each question may take, half-typed ones kept over a reload
+  const [note, setNote] = useDraft(`card:${chat.key}:${q.id}`)
+  const [typedDraft, setTypedDraft] = useDraft(`card-parts:${chat.key}:${q.id}`)
+  const typed = typedAnswers(typedDraft)
+  const setTyped = (i: number, text: string) => setTypedDraft(JSON.stringify({ ...typed, [i]: text }))
+  const [busy, setBusy] = useState(false)
+  const sending = useRef(false)
+  const [err, setErr] = useState('')
+  const sent = q.sent !== undefined
+  const by = answeredBy(q, chat, msg)
+  const answerOf = (i: number) => !!typed[i]?.trim() || (sel[i]?.length ?? 0) > 0
+  // every required question answered, and something to say back: a card whose questions are all optional still needs one
+  // answer or the note
+  const ready = parts.every((p, i) => p.optional || answerOf(i)) && (parts.some((_, i) => answerOf(i)) || !!note.trim())
+  const choose = (i: number, j: number) => {
+    const part = parts[i]
+    setSel(i, part.multi ? (sel[i]?.includes(j) ? sel[i].filter((x) => x !== j) : [...(sel[i] ?? []), j]) : [j])
+    // a pick replaces the words typed in place of the choices
+    if (typed[i]) setTyped(i, '')
+  }
+  const send = async () => {
+    if (sent || sending.current || !ready) return
+    sending.current = true
+    setBusy(true)
+    setErr('')
+    let accepted = false
+    try {
+      const r = await act({
+        type: 'answer',
+        chat: chat.key,
+        question: q.id,
+        choice: -1,
+        parts: parts.map((p, i) => ({ choice: sel[i]?.[0] ?? -1, choices: p.multi ? (sel[i] ?? []) : undefined, other: typed[i]?.trim() || undefined })),
+        note: note.trim() || undefined,
+        space,
+      })
+      if (r?.ok === false) setErr(r.error ?? "That didn't go through.")
+      else {
+        accepted = true
+        setNote('')
+        setTypedDraft('')
+        for (let i = 0; i < parts.length; i++) chosenParts.delete(`${picks}:${i}`)
+      }
+    } catch (e) {
+      setErr(reasonOf(e))
+    } finally {
+      // a successful answer stays locked until the server's answered snapshot arrives
+      if (!accepted) {
+        sending.current = false
+        setBusy(false)
+      }
+    }
+  }
+  return (
+    <CardShell title={q.title} source={source}>
+      <div className="flex flex-col gap-3">
+        {parts.map((part, i) => (
+          <div key={i} className={clsx('flex flex-col gap-2', i > 0 && 'border-t border-line pt-3')}>
+            <div className="flex items-baseline gap-2">
+              <b data-part-title className="min-w-0 flex-1 text-[0.9375rem] font-semibold break-words">{part.title}</b>
+              {part.optional && !sent ? <span className="shrink-0 text-[0.75rem] text-fg3 phone:text-[0.8125rem]">Optional</span> : null}
+            </div>
+            {part.choices.map((c, j) => {
+              const on = sent ? part.sent === j || !!part.picks?.includes(j) : (sel[i] ?? []).includes(j)
+              return (
+                <button
+                  key={j}
+                  type="button"
+                  aria-pressed={on}
+                  disabled={sent || busy}
+                  onClick={() => choose(i, j)}
+                  className="group press relative flex min-h-10 w-full items-center gap-2.5 rounded-row px-3 py-2 text-left shadow-[inset_0_0_0_1px_var(--line2)] enabled:hover:bg-hover disabled:cursor-default disabled:opacity-40 aria-pressed:shadow-[inset_0_0_0_1.5px_var(--fg)] disabled:aria-pressed:opacity-100 coarse:min-h-11 phone:min-h-12"
+                >
+                  <span aria-hidden="true" className={pickBox(part.multi)} />
+                  {c.description ? (
+                    <span>
+                      <span className="block">{c.label}</span>
+                      <span className="block text-[0.75rem]/[18px] text-fg2 phone:text-[0.8125rem]/5">{c.description}</span>
+                    </span>
+                  ) : (
+                    c.label
+                  )}
+                </button>
+              )
+            })}
+            {part.other && !sent ? (
+              <input
+                name={`other-${i}`}
+                disabled={busy}
+                data-kept
+                aria-label={`Other answer to “${part.title}”`}
+                className={noteBox}
+                placeholder="Other: type your own answer…"
+                value={typed[i] ?? ''}
+                onChange={(e) => {
+                  setTyped(i, e.target.value)
+                  // a typed answer replaces the choices
+                  if (e.target.value.trim()) setSel(i, [])
+                }}
+              />
+            ) : null}
+            {sent ? (
+              <Sent>
+                <CheckIcon className={ic} />
+                <span className="min-w-0 break-words text-fg2">{partAnswer(part)}</span>
+              </Sent>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {by ? <Quote q={by} chat={chat.key} from={from} you={false} loose label="Answered by" /> : null}
+      {sent ? (
+        <Sent>
+          <CheckIcon className={ic} />
+          <span className="shrink-0">{q.elsewhere?.label ?? answeredHow(q)}</span>
+          {q.elsewhere ? <LinkButton onClick={() => goChat(q.elsewhere!.chat)}>{q.elsewhere.name}</LinkButton> : null}
+        </Sent>
+      ) : (
+        <>
+          <TextBox
+            name="note"
+            disabled={busy}
+            data-kept
+            label="Note"
+            className={noteBox}
+            placeholder="Add a note (optional)"
+            value={note}
+            onChange={setNote}
+          />
+          <div className="flex items-center justify-end gap-2">
+            {err ? <span role="alert" className="mr-auto text-[0.75rem] text-need phone:text-[0.8125rem]">{err}</span> : null}
+            <Primary soft disabled={busy || !ready} onClick={send}>
+              Send
+            </Primary>
+            {busy ? <span role="status" className="text-[0.8125rem] text-fg2">Sending…</span> : null}
+          </div>
+        </>
+      )}
+    </CardShell>
+  )
+}
+
+function SingleCard({ q, chat, msg, from, space, source }: CardProps) {
   // Unmarked cards always require a deliberate pick and Send, including all approval prompts.
   const picks = `${chat.key}:${q.id}`
   const [sel, setPicked] = useState<number[]>(() => chosen.get(picks) ?? [])
@@ -1407,13 +1592,7 @@ export function QuestionCard({ q, chat, msg, from, space, source }: { q: Questio
             }}
             className="group press relative flex min-h-10 w-full items-center gap-2.5 rounded-row px-3 py-2 text-left shadow-[inset_0_0_0_1px_var(--line2)] enabled:hover:bg-hover disabled:cursor-default disabled:opacity-40 aria-pressed:shadow-[inset_0_0_0_1.5px_var(--fg)] disabled:aria-pressed:opacity-100 coarse:min-h-11 phone:min-h-12"
           >
-            {immediate ? null : <span
-              aria-hidden="true"
-              className={clsx(
-                'size-4 shrink-0 shadow-[inset_0_0_0_1.5px_var(--fg3)] group-aria-pressed:shadow-[inset_0_0_0_5px_var(--fg)]',
-                q.multi ? 'rounded-[4px]' : 'rounded-full',
-              )}
-            />}
+            {immediate ? null : <span aria-hidden="true" className={pickBox(q.multi)} />}
             {c.description ? (
               <span>
                 <span className="block">{immediate ? `Send: ${c.label}` : c.label}</span>

@@ -46,6 +46,8 @@ The human reads your replies in a chat on a phone, tablet or desktop, never this
     <reaction from="Elias" emoji="👍" file="screenshot.png" path="~/.shepherdr/inbox/screenshot.png"/>
     <reaction from="Elias" emoji="👍" title="Weekly board" artifact="wk3n" version="2"/>
     <answer from="Elias" question="Rerun CI on main?">Rerun it</answer>
+    <answer from="Elias" question="Which branch?" card="Release prep">release/2</answer>   (one per question, when
+    <answer from="Elias" question="Rerun CI?" card="Release prep">Leave it</answer>          the card asked several)
     <secret from="Elias" name="GITHUB_TOKEN" for="api"/>
     <artifact-sent from="Elias" title="Weekly board" artifact="wk3n" version="2">Pinned colour: Accent</artifact-sent>
     <artifact-comment from="Elias" title="Weekly board" artifact="wk3n" version="2">Make the bars blue</artifact-comment>
@@ -75,12 +77,30 @@ A question with a few answers is a choice card, then end your turn:
 
     shepherdr ask "Rerun CI on main?" --choice "Rerun it" --choice "Skip the flaky test" --choice "Leave it for now"
 
+One card may ask several questions, each with its own choices: the card's title first, then a `--question` group for
+each, in the order they should show. The human answers them all and sends once:
+
+    shepherdr ask "Release prep" \
+      --question "Which branch?" --choice "main" --choice "release/2" --desc "release/2=the frozen one" \
+      --question "Rerun CI?" --choice "Rerun it" --choice "Leave it" --optional
+
+`--other` allows a typed answer, `--multi` several picks, `--desc "<choice>=<one line>"` explains a choice: inside a
+`--question` group each is for that question. Every question must be answered before Send unless it has `--optional`.
+
+The answer arrives as one line per question, each with its question, after the card's title on its `card`:
+
+    <answer from="Elias" question="Which branch?" card="Release prep">release/2</answer>
+    <answer from="Elias" question="Rerun CI?" card="Release prep">Rerun it</answer>
+
+A card that asked one question is answered on the line it always was, with no `card`:
+`<answer from="Elias" question="Rerun CI on main?">Rerun it</answer>`.
+
 `--ordinary` explicitly marks a simple ordinary question: its choice buttons send immediately, with an Add a note
 route for composing first. Never use it for permission, startup approval, plans or other approvals. Leave it off
-when unsure; unmarked cards keep pick-then-Send. `--multi` always keeps Send.
+when unsure; unmarked cards keep pick-then-Send. It is for a card with one question: a card that asks several is
+always answered together with Send. `--multi` always keeps Send.
 
-`--other` allows a typed answer, `--multi` several picks, `--desc "<choice>=<one line>"` explains a choice. A plan for
-the human's yes is `shepherdr plan <id> --step "…" --step "…"`, then end your turn.
+A plan for the human's yes is `shepherdr plan <id> --step "…" --step "…"`, then end your turn.
 
 ### Artifacts
 

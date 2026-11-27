@@ -38,14 +38,15 @@ export function keptTags(snap: Pick<Snapshot, 'places' | 'tasks' | 'asks'>, onSc
 /** a choice as an alert shows it: a choice that needs a note says so in the app, not in the alert */
 const short = (q: Question, i: number) => (q.noteRequiredFor === i ? q.choices[i].label.replace(/ with a note$/i, '') : q.choices[i].label)
 
-/** the card's choices in short: "Approve the plan · Send it back" */
-export const choicesLine = (q: Question) => q.choices.map((_, i) => short(q, i)).join(' · ')
+/** the card's choices in short: "Approve the plan · Send it back"; a card of several questions says what each asks */
+export const choicesLine = (q: Question) => (q.parts ? q.parts.map((p) => p.title).join(' · ') : q.choices.map((_, i) => short(q, i)).join(' · '))
 
 /** the choices a notification button may send at once: not a pick of several, not one that needs a note, never a
  *  terminal menu (its first choices all say yes, and an old alert's button would press keys in whatever menu is up then);
  *  two at most */
 export function quickChoices(q: Question): { label: string; choice: number }[] {
-  if (q.multi || q.id.startsWith('menu:')) return []
+  // a card of several questions is answered in the app, all together: no one-tap from an alert
+  if (q.multi || q.parts || q.id.startsWith('menu:')) return []
   return q.choices
     .map((c, i) => ({ label: short(q, i), choice: i }))
     .filter((c) => c.choice !== q.noteRequiredFor)

@@ -1,32 +1,43 @@
 // Reads a shepherdr command line: positional words and --options (repeatable ones collect into lists).
-import { splitFacts, STATUS_MAX, SUMMARY_MAX, TITLE_MAX } from '../../shared/types.ts'
+import { splitFacts, STATUS_MAX, SUMMARY_MAX, TITLE_MAX, type QuestionPart } from '../../shared/types.ts'
 
 export interface Parsed {
   words: string[]
   opts: Record<string, string[]>
   flags: Set<string>
+  /** every --option and --flag in the order it was written, for options that group by position (ask --question …
+   *  --choice …) */
+  order: { name: string; value?: string }[]
 }
 
-const FLAGS = new Set(['ordinary', 'other', 'multi', 'json', 'project-coordinator', 'off', 'help', 'force', 'archived', 'machine', 'later', 'save'])
+const FLAGS = new Set(['ordinary', 'other', 'multi', 'optional', 'json', 'project-coordinator', 'off', 'help', 'force', 'archived', 'machine', 'later', 'save'])
 
 export function parseArgs(args: string[]): Parsed {
   const words: string[] = []
   const opts: Record<string, string[]> = {}
   const flags = new Set<string>()
+  const order: { name: string; value?: string }[] = []
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (a.startsWith('--')) {
       const eq = a.indexOf('=')
       const name = eq > 0 ? a.slice(2, eq) : a.slice(2)
-      if (eq > 0) (opts[name] ??= []).push(a.slice(eq + 1))
-      else if (FLAGS.has(name) || i + 1 >= args.length || args[i + 1].startsWith('--')) flags.add(name)
-      else (opts[name] ??= []).push(args[++i])
+      if (eq > 0) {
+        ;(opts[name] ??= []).push(a.slice(eq + 1))
+        order.push({ name, value: a.slice(eq + 1) })
+      } else if (FLAGS.has(name) || i + 1 >= args.length || args[i + 1].startsWith('--')) {
+        flags.add(name)
+        order.push({ name })
+      } else {
+        ;(opts[name] ??= []).push(args[++i])
+        order.push({ name, value: args[i] })
+      }
     } else words.push(a)
   }
   // --project, from before spaces, is --space
   if (opts.project) opts.space = [...(opts.space ?? []), ...opts.project]
   delete opts.project
-  return { words, opts, flags }
+  return { words, opts, flags, order }
 }
 
 export const one = (p: Parsed, name: string) => p.opts[name]?.at(-1)
@@ -40,6 +51,51 @@ export function summaryOpts(p: Parsed, rest: string[] = []): { said?: string; fa
       `That summary is ${said.length} characters: write a shorter one, ${SUMMARY_MAX} at most, in plain words on what changed for the human. PR, commit, checks, review and what is not proven go in --facts "…"; more detail goes in your chat or your proof.`,
     )
   return { said: said || undefined, facts }
+}
+
+/**
+ * A card's several questions, each group written in the order it should show:
+ *
+ *   --question "Which branch?" --choice main --choice next [--desc "main=the fork's base"] [--other] [--multi]
+ *   --question "Rerun CI?" --choice "Rerun it" --choice "Leave it" [--optional]
+ *
+ * None for a single question: then `ask`'s own title is the question and the card's own flags apply. --optional marks a
+ * question that may be left blank before Send; every other one is required.
+ */
+/** a question and its choices sit on one line each on a phone: any run of spaces and newlines is one space */
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+export function askQuestions(p: Parsed): QuestionPart[] | undefined {
+  if (!p.opts.question?.length) return undefined
+  const parts: QuestionPart[] = []
+  // each question's choice descriptions, by label, until its choices are made
+  const descs = new Map<QuestionPart, Record<string, string>>()
+  let cur: QuestionPart | undefined
+  for (const o of p.order) {
+    if (o.name === 'question') {
+      if (cur && !cur.choices.length && !cur.other) throw new Error(`The question “${cur.title}” has no --choice: give it two at least, or --other for a typed answer.`)
+      cur = { title: oneLine(o.value!), choices: [] }
+      parts.push(cur)
+      descs.set(cur, {})
+      continue
+    }
+    if (!['choice', 'desc', 'other', 'multi', 'optional'].includes(o.name)) continue
+    if (!cur) throw new Error('Put a --question before its --choice, --desc, --other, --multi or --optional: shepherdr ask "<card title>" --question "<one question>" --choice "<label>" --choice "<label>" …')
+    if (o.name === 'choice') cur.choices.push({ label: oneLine(o.value!) })
+    else if (o.name === 'desc') {
+      const eq = o.value!.indexOf('=')
+      if (eq < 0) throw new Error(`--desc takes "<choice>=<one line>", not "${o.value}".`)
+      descs.get(cur)![o.value!.slice(0, eq).trim()] = o.value!.slice(eq + 1).trim()
+    } else cur[o.name as 'other' | 'multi' | 'optional'] = true
+  }
+  for (const part of parts) {
+    if (!part.title) throw new Error('--question takes the question in words.')
+    if (part.choices.length < 2 && !part.other) throw new Error(`The question “${part.title}” has fewer than two choices: give it two at least, or --other for a typed answer.`)
+    const desc = descs.get(part) ?? {}
+    for (const c of part.choices) c.description = desc[c.label]
+  }
+  if (p.flags.has('ordinary')) throw new Error('--ordinary is for a card with one question: a card of several is always answered, all together, with Send.')
+  return parts
 }
 
 export const HELP = `shepherdr: talk to Shepherdr from a terminal (agents use it; so can you)
@@ -156,7 +212,14 @@ Task agents
 
 Chat
   shepherdr ask "<question>" --choice "<label>" ... [--desc "<label>=<one line>"] [--other] [--multi] [--ordinary]
-      --ordinary: ordinary questions only; never permissions, startup approvals or plans
+  shepherdr ask "<card title>" --question "<one question>" --choice "<label>" --choice "<label>" ... [--desc ...]
+                 [--other] [--multi] [--optional] --question "<next question>" --choice "<label>" ...
+                                                 several questions on one card: the card's title, then each --question
+                                                 with its own --choice, --desc, --other and --multi, in the order
+                                                 written. The human answers them all and Sends once; a question is
+                                                 required unless --optional says it may be left blank. Each answer
+                                                 reaches the agent on its own <answer> line, with its question
+      --ordinary: one-question cards only; ordinary questions, never permissions, startup approvals or plans
   shepherdr alert "<title>" --body "<why now>" [--task <id>]
                                                  with --task: it says what that task needs and opens on its card
 

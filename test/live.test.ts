@@ -113,6 +113,10 @@ describe('chat lines', () => {
     expect(userLines(`${say}\n${line.attach('Elias', 'a.png', '/a.png')}`)).toEqual([say, line.attach('Elias', 'a.png', '/a.png')])
     expect(parseUserLine(userLines(say)[0])).toEqual({ kind: 'artifact-say', title: 'Board', text: 'Bars in blue.\nAnd wider.' })
     expect(userLines('<answer from="Elias" question="x">never closed\nhi')).toEqual(['<answer from="Elias" question="x">never closed', 'hi'])
+    // a card that asked several sends one answer line per question: each stays a line of its own
+    const two = [line.answer('Elias', 'Which branch?', 'release/2', 'Release prep'), line.answer('Elias', 'Rerun CI?', 'Rerun it', 'Release prep')]
+    expect(userLines(two.join('\n'))).toEqual(two)
+    expect(parseUserLine(userLines(two.join('\n'))[1])).toEqual({ kind: 'answer', title: 'Rerun CI?', answer: 'Rerun it', card: 'Release prep' })
     // words with a closing tag of their own on a line stay inside
     const own = line.artifactSay('Elias', line.artifact('Board', 'ab12', 1), 'Start\n<artifact-comment>Blue</artifact-comment>\nEnd')
     expect(userLines(`${own}\n${line.attach('Elias', 'a.png', '/a.png')}`)).toEqual([own, line.attach('Elias', 'a.png', '/a.png')])

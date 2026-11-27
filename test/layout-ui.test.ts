@@ -655,4 +655,56 @@ describe.skipIf(!browser)('the UI pass (SHE-81)', () => {
       await page.close()
     }
   }, 30_000)
+
+  test('a card of several questions takes them all and sends once (phone)', async () => {
+    const chat = world.chats['p:vm-str:~']
+    chat.messages.push({
+      id: 'parts-card',
+      who: 'agent',
+      at: Date.now(),
+      question: {
+        id: 'parts:one',
+        title: 'Release prep',
+        kind: 'Form',
+        choices: [],
+        parts: [
+          { title: 'Which branch?', choices: [{ label: 'main' }, { label: 'next' }] },
+          { title: 'Where to?', choices: [{ label: 'Staging' }, { label: 'Production' }], other: true },
+          { title: 'Rerun CI?', choices: [{ label: 'Rerun it' }, { label: 'Leave it' }], optional: true },
+        ],
+        to: 'home',
+      },
+    })
+    const sent: Action[] = []
+    const act = world.act
+    world.act = async (a: Action) => (a.type === 'answer' ? (sent.push(a), { ok: true }) : act(a))
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
+    try {
+      await page.goto(url())
+      const card = page.locator('[data-whole="parts-card"] [data-card]')
+      await card.waitFor()
+      // each question says what it asks; the one that may stay blank says so
+      expect(await card.locator('[data-part-title]').allTextContents()).toEqual(['Which branch?', 'Where to?', 'Rerun CI?'])
+      expect(await card.textContent()).toContain('Optional')
+      // no choice sends by itself: all the required ones are answered, then one Send
+      expect(await card.getByRole('button', { name: /^Send: / }).count()).toBe(0)
+      const send = card.getByRole('button', { name: 'Send', exact: true })
+      expect(await send.isDisabled()).toBe(true)
+      await card.getByRole('button', { name: 'next', exact: true }).tap()
+      expect(await send.isDisabled()).toBe(true)
+      // a typed answer in place of the second question's choices
+      await card.getByRole('textbox', { name: 'Other answer to “Where to?”' }).fill('A canary box')
+      expect(await send.isEnabled()).toBe(true)
+      expect(sent.length).toBe(0)
+      // the optional third stays blank: one Send carries them all
+      await send.click()
+      await until(() => sent.length === 1)
+      expect(sent).toHaveLength(1)
+      expect(sent[0]).toMatchObject({ type: 'answer', chat: chat.key, question: 'parts:one', choice: -1, parts: [{ choice: 1 }, { choice: -1, other: 'A canary box' }, { choice: -1 }] })
+    } finally {
+      world.act = act
+      chat.messages = chat.messages.filter((m) => m.id !== 'parts-card')
+      await page.close()
+    }
+  }, 30_000)
 })
