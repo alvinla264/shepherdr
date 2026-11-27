@@ -46,6 +46,7 @@ guard_systemctl() {
         guard_now=1
         ;;
       -* | *=*) : ;;
+      *\** | *\?* | *\[*) guard_unit=$guard_arg ;;
       *herdr* | *Herdr* | *HERDR* | hc-* | default.target | multi-user.target | graphical.target | rescue.target | emergency.target)
         guard_unit=$guard_arg
         ;;
@@ -67,15 +68,25 @@ guard_kill() {
   guard_kind=$1
   shift
   guard_full=
-  guard_pattern=
   for guard_arg in "$@"; do
     case $guard_arg in
       -f | --full | -r | --regexp) guard_full=1 ;;
-      -*) : ;;
-      *) guard_pattern=$guard_arg ;;
     esac
   done
-  [ -n "$guard_pattern" ] || return 0
+  # every name or pattern it is given: killall takes several, and a pkill option's value is not one
+  for guard_arg in "$@"; do
+    case $guard_arg in
+      -*) : ;;
+      *) guard_kill_one "$guard_kind" "$guard_arg" || return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# one name or pattern: does it reach the live session?
+guard_kill_one() {
+  guard_kind=$1
+  guard_pattern=$2
   # a pattern of nothing but wildcards and punctuation names no process: it reaches all of them
   case $guard_pattern in
     *[A-Za-z0-9]*) : ;;
@@ -124,6 +135,10 @@ guard_herdr() {
       guard_reason='would install a new herdr over the one running Shepherdr'
       return 1
       ;;
+    start | stop | restart)
+      guard_reason="would $guard_sub the herdr session that runs Shepherdr"
+      return 1
+      ;;
     server)
       if [ "$guard_next" = stop ]; then
         guard_reason='would stop the herdr server that runs Shepherdr'
@@ -144,6 +159,13 @@ guard_herdr() {
 
 # shepherdr: what installs over, migrates or moves the live home, and what changes its secrets
 guard_shepherdr() {
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --url | --space | --machine | --home) shift; [ $# -gt 0 ] && shift; continue ;;
+      --url=* | --space=* | --machine=* | --home=*) shift; continue ;;
+    esac
+    break
+  done
   case ${1-} in
     install | update | uninstall | migrate | web | secrets)
       guard_reason="would $1 this machine's live Shepherdr home"
@@ -160,8 +182,6 @@ guard_shepherdr() {
   esac
   return 0
 }
-
-# who a refusal names: the chat this agent is (SHE-21/Agent), set by the launch
 
 # the real command, found against the PATH set before this directory was put first; never this wrapper itself
 guard_real() {

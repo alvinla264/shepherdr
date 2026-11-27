@@ -2,9 +2,9 @@
 // Shepherdr and herdr down, the wrappers that never reach the real command when they refuse, and the launch that puts
 // the guard first on every agent's PATH. Nothing here can touch this machine's live session: the "real" commands are
 // stubs in a temporary folder that only record their arguments.
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GUARD_COMMANDS, agentEnv, guardDir, guarded } from '../server/live/box.ts'
@@ -17,7 +17,7 @@ const script = join(guard, '.guard')
 
 /** what the pure policy says: guard_verdict COMMAND ARG…, sourced so that only it runs */
 function policy(command: string, args: string[]) {
-  const r = spawnSync('sh', ['-c', '. "$1" || exit 2; shift; if guard_verdict "$@"; then printf "ALLOW"; else printf "REFUSE %s" "$guard_reason"; fi', 'sh', script, command, ...args], { encoding: 'utf8' })
+  const r = spawnSync('sh', ['-c', '. "$1" || exit 2; shift; if guard_verdict "$@"; then printf "ALLOW"; else printf "REFUSE %s" "$guard_reason"; exit 1; fi', 'sh', script, command, ...args], { encoding: 'utf8' })
   return { said: r.stdout, code: r.status }
 }
 
@@ -36,6 +36,8 @@ const ALLOWED: [string, string[]][] = [
   ['herdr', ['agent', 'start', 'pi']],
   ['herdr', ['session', 'list']],
   ['herdr', ['--session', 'work', 'pane', 'list']],
+  ['pkill', ['-u', 'alvin', 'sleep']],
+  ['shepherdr', ['--url', 'http://127.0.0.1:7791', 'task', 'list']],
   ['shepherdr', ['task', 'list']],
   ['shepherdr', ['restart', 'SHE-12']],
   ['shepherdr', ['set', 'heartbeat.when', 'RRULE:FREQ=DAILY']],
@@ -53,6 +55,8 @@ const REFUSED: [string, string[]][] = [
   ['systemctl', ['--user', 'stop', '--all']],
   ['systemctl', ['--user', 'isolate', 'herdr.service']],
   ['systemctl', ['--user', 'disable', '--now', 'herdr.service']],
+  ['systemctl', ['--user', 'stop', '*']],
+  ['systemctl', ['--user', 'restart', 'herdr.se*']],
   ['pkill', ['bun']],
   ['pkill', ['-9', '-f', 'herdr']],
   ['pkill', ['-f', 'bun server/main.ts']],
@@ -60,13 +64,23 @@ const REFUSED: [string, string[]][] = [
   ['pkill', ['-f', '.']],
   ['killall', ['-r', '.*']],
   ['killall', ['herdr']],
+  ['killall', ['bun', 'sleep']],
+  ['pkill', ['-f', 'herdr', '-u', 'alvin']],
   ['herdr', ['server', 'stop']],
   ['herdr', ['--session', 'live', 'server', 'stop']],
   ['herdr', ['session', 'stop', 'work']],
   ['herdr', ['session', 'delete', 'work']],
   ['herdr', ['update']],
+  ['herdr', ['start']],
+  ['herdr', ['stop']],
+  ['herdr', ['--session', 'live', 'restart']],
   ['shepherdr', ['update']],
   ['shepherdr', ['install']],
+  ['shepherdr', ['uninstall']],
+  ['shepherdr', ['migrate']],
+  ['shepherdr', ['web']],
+  ['shepherdr', ['secrets']],
+  ['shepherdr', ['--url', 'http://127.0.0.1:7791', 'update']],
   ['shepherdr', ['secret', 'set', 'GITHUB_TOKEN']],
   ['shepherdr', ['secret', 'rm', 'GITHUB_TOKEN']],
 ]
@@ -86,9 +100,15 @@ describe('the guard policy', () => {
   })
 })
 
+const made: string[] = []
+afterAll(() => {
+  for (const dir of made) rmSync(dir, { recursive: true, force: true })
+})
+
 /** real-looking commands that record what they were given, in a temporary folder */
 function stubs() {
   const dir = mkdtempSync(join(tmpdir(), 'shep-guard-'))
+  made.push(dir)
   const real = join(dir, 'real')
   const calls = join(dir, 'calls')
   mkdirSync(real)

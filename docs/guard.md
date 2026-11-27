@@ -34,10 +34,10 @@ One plain line, exit 1, nothing run:
 
 | command | refused when |
 | --- | --- |
-| `systemctl` | `stop`, `restart`, `try-restart`, `reload-or-restart`, `kill`, `mask` or `isolate` of a unit named `*herdr*` (so `herdr.service`, `herdr-core`, `shepherdr.service`), `hc-*` (herdr-core's holders), or of `--all`, `default.target`, `multi-user.target`, `graphical.target`, `rescue.target`, `emergency.target`; `disable --now` of those units |
-| `pkill`, `killall` | a bare name that is the live server or herdr (`bun`, `node`, `perl`, `sh`, `bash`, `dash`, `zsh`, `systemd`, `systemctl`, `herdr`, `herdr-core`, `shepherdr`, `hc-*`); a full-line/regex pattern (`-f`, `-r`) mentioning `herdr`, `shepherdr`, `server/main`, `main.ts`, `cli.ts`, `supervise.ts`, `plugin.ts`, `bun`, `node` or `perl`; a pattern of nothing but wildcards (`pkill -f .`, `killall -r '.*'`) |
-| `herdr` | `update`; `server stop`; `session stop` or `session delete`, after any `--session`/`--machine`/`--remote` |
-| `shepherdr` | `install`, `update`, `uninstall`, `migrate`, `web`, `secrets`; `secret set`, `secret rm`, `secret elevenlabs` |
+| `systemctl` | `stop`, `restart`, `try-restart`, `reload-or-restart`, `kill`, `mask` or `isolate` of a unit named `*herdr*` (so `herdr.service`, `herdr-core`, `shepherdr.service`), `hc-*` (herdr-core's holders), or of `--all`, `default.target`, `multi-user.target`, `graphical.target`, `rescue.target`, `emergency.target`, or a unit glob (`*`, `?`, `[`); `disable --now` of those units |
+| `pkill`, `killall` | any name or pattern it is given: a bare name that is the live server or herdr (`bun`, `node`, `perl`, `sh`, `bash`, `dash`, `zsh`, `systemd`, `systemctl`, `herdr`, `herdr-core`, `shepherdr`, `hc-*`); a full-line/regex pattern (`-f`, `-r`) mentioning `herdr`, `shepherdr`, `server/main`, `main.ts`, `cli.ts`, `supervise.ts`, `plugin.ts`, `bun`, `node` or `perl`; a pattern of nothing but wildcards (`pkill -f .`, `killall -r '.*'`) |
+| `herdr` | `start`, `stop`, `restart`; `update`; `server stop`; `session stop` or `session delete`, after any `--session`/`--machine`/`--remote` |
+| `shepherdr` | `install`, `update`, `uninstall`, `migrate`, `web`, `secrets`; `secret set`, `secret rm`, `secret elevenlabs` — after any leading `--url`, `--space`, `--machine` or `--home` |
 
 A refusal reads, for example:
 
