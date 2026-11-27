@@ -62,6 +62,9 @@ export function summaryOpts(p: Parsed, rest: string[] = []): { said?: string; fa
  * None for a single question: then `ask`'s own title is the question and the card's own flags apply. --optional marks a
  * question that may be left blank before Send; every other one is required.
  */
+/** a question and its choices sit on one line each on a phone: any run of spaces and newlines is one space */
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
+
 export function askQuestions(p: Parsed): QuestionPart[] | undefined {
   if (!p.opts.question?.length) return undefined
   const parts: QuestionPart[] = []
@@ -71,14 +74,14 @@ export function askQuestions(p: Parsed): QuestionPart[] | undefined {
   for (const o of p.order) {
     if (o.name === 'question') {
       if (cur && !cur.choices.length && !cur.other) throw new Error(`The question “${cur.title}” has no --choice: give it two at least, or --other for a typed answer.`)
-      cur = { title: o.value!.trim(), choices: [] }
+      cur = { title: oneLine(o.value!), choices: [] }
       parts.push(cur)
       descs.set(cur, {})
       continue
     }
     if (!['choice', 'desc', 'other', 'multi', 'optional'].includes(o.name)) continue
     if (!cur) throw new Error('Put a --question before its --choice, --desc, --other, --multi or --optional: shepherdr ask "<card title>" --question "<one question>" --choice "<label>" --choice "<label>" …')
-    if (o.name === 'choice') cur.choices.push({ label: o.value!.trim() })
+    if (o.name === 'choice') cur.choices.push({ label: oneLine(o.value!) })
     else if (o.name === 'desc') {
       const eq = o.value!.indexOf('=')
       if (eq < 0) throw new Error(`--desc takes "<choice>=<one line>", not "${o.value}".`)

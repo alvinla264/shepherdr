@@ -1379,6 +1379,8 @@ function PartsCard({ q, chat, msg, from, space, source }: CardProps) {
   const choose = (i: number, j: number) => {
     const part = parts[i]
     setSel(i, part.multi ? (sel[i]?.includes(j) ? sel[i].filter((x) => x !== j) : [...(sel[i] ?? []), j]) : [j])
+    // a pick replaces the words typed in place of the choices
+    if (typed[i]) setTyped(i, '')
   }
   const send = async () => {
     if (sent || sending.current || !ready) return
