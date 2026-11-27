@@ -97,6 +97,13 @@ describe('where a tap opens', () => {
   test('a coordinator question: its chat, on the card', () => {
     expect(alertUrl({ place: 'all', focus: 'ask:12ab' })).toBe('./?place=all&focus=ask%3A12ab')
   })
+  test('behind a trusted proxy an alert opens the domain, not whatever host raised it', () => {
+    expect(alertUrl({ place: 'all', focus: 'ask:12ab' }, 'https://shep.example.com')).toBe('https://shep.example.com/?place=all&focus=ask%3A12ab')
+    expect(alertUrl({ place: 'p:vm-str:gtm' }, 'https://shep.example.com/')).toBe('https://shep.example.com/?place=p%3Avm-str%3Agtm')
+    // the push carries it too, and stays relative when no address is known
+    expect(pushPayload({ id: 'u', from: 'Shepherdr', title: 'x', body: '', go: { place: 'all' } }, { count: 0, tags: [] }, 'https://shep.example.com').url).toBe('https://shep.example.com/?place=all')
+    expect(pushPayload({ id: 'u', from: 'Shepherdr', title: 'x', body: '', go: { place: 'all' } }, { count: 0, tags: [] }).url).toBe('./?place=all')
+  })
 })
 
 describe('what goes to the device', () => {

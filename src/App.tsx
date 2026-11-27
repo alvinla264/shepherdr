@@ -110,6 +110,8 @@ export default function App() {
 function Loading() {
   const device = useUI((u) => u.device)
   const lost = useUI((u) => !!u.offline)
+  // the page answers but the live link never opened: usually a proxy that does not pass WebSockets
+  const stuck = useUI((u) => !!u.liveDown)
   // a link that neither opens nor fails says so too, after a while
   const [slow, setSlow] = useState(false)
   useEffect(() => {
@@ -123,7 +125,7 @@ function Loading() {
         <span className="grid size-10 place-items-center overflow-hidden rounded-[11px] bg-fg pt-1 text-bg">
           <CrookIcon className="size-8 overflow-visible" />
         </span>
-        {offline ? "Can't reach Shepherdr. Trying again…" : 'Loading…'}
+        {stuck && !lost ? "Live updates aren't getting through. The proxy in front may not pass WebSockets; trying again." : offline ? "Can't reach Shepherdr. Trying again…" : 'Loading…'}
       </div>
     </div>
   )

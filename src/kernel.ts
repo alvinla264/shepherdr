@@ -265,6 +265,8 @@ export interface UI {
   /** the message each chat's box replies to, with its quote */
   reply: Record<string, ReplyQuote & { id: string }>
   offline: number | null
+  /** the page answers but the live link never opened, since when: the proxy in front is not passing the WebSocket */
+  liveDown: number | null
 }
 
 /* ---------- store ---------- */
@@ -400,6 +402,7 @@ let state: State = {
     reply: {},
     find: null,
     offline: null,
+    liveDown: null,
     ...keptUI,
   },
 }
@@ -707,7 +710,7 @@ export function connect() {
     if (saying) clearTimeout(saying)
     saying = null
     watched = ''
-    if (state.ui.offline) setUI({ offline: null })
+    if (state.ui.offline || state.ui.liveDown) setUI({ offline: null, liveDown: null })
     watchVisible()
   }
   sock.onmessage = (ev) => {
@@ -763,8 +766,22 @@ function forget() {
 function sayLater(at = Date.now()): ReturnType<typeof setTimeout> {
   return setTimeout(() => {
     if (Date.now() - at > SAY_LOST_AFTER + 1000) saying = sayLater()
-    else if (ws?.readyState !== WebSocket.OPEN) setUI({ offline: downSince })
+    else void sayDown()
   }, SAY_LOST_AFTER)
+}
+
+/**
+ * Say it plainly, and say what is really wrong: nothing at all answers while the socket is down, but a page that
+ * answers while the live link never opens is usually a proxy in front that does not upgrade the WebSocket. The screen
+ * would otherwise sit there looking frozen.
+ */
+async function sayDown() {
+  if (ws?.readyState === WebSocket.OPEN) return
+  const at = downSince ?? Date.now()
+  const reachable = await fetch('api/version', { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false)
+  if (ws?.readyState === WebSocket.OPEN) return
+  if (reachable) setUI({ liveDown: at, offline: null })
+  else setUI({ offline: at, liveDown: null })
 }
 
 /** back on screen (or on the network): an open link must answer a ping, any other is tried again at once */
@@ -784,7 +801,7 @@ function wake() {
   if (saying) {
     clearTimeout(saying)
     saying = sayLater()
-    if (state.ui.offline) setUI({ offline: null })
+    if (state.ui.offline || state.ui.liveDown) setUI({ offline: null, liveDown: null })
   }
   if (ws && Date.now() - tried < 1000) return
   forget()

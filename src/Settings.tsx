@@ -448,6 +448,7 @@ const ICONS: Record<string, ComponentType<{ className?: string }>> = {
   Autopilot: AutopilotIcon,
   'Time zone': ClockIcon,
   Machine: MachineIcon,
+  Web: MachineIcon,
   Browser: GlobeIcon,
   Notify: ChatIcon,
   Notifications: BellIcon,

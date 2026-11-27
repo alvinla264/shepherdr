@@ -3,6 +3,7 @@ import webpush from 'web-push'
 import { pushPayload } from '../shared/alerts.ts'
 import type { Alert } from '../shared/types.ts'
 import { readJson, writeJson } from './store.ts'
+import { web } from './web.ts'
 
 export const DEFAULT_PUSH_CONTACT = 'https://github.com/eliasstravik/shepherdr'
 
@@ -53,7 +54,8 @@ export class Push {
   /** skip: subscriptions whose app is on screen right now; waits: what waits on you now (the icon's count, and what
    *  older alerts may stay) */
   async send(a: Alert, skip: Set<string> = new Set(), waits: { count: number; tags: string[] } = { count: 0, tags: [] }) {
-    const body = JSON.stringify(pushPayload(a, waits))
+    // the domain, when the app knows it (a trusted proxy or web.publicUrl), so a tap opens it rather than 127.0.0.1
+    const body = JSON.stringify(pushPayload(a, waits, web.base()))
     const gone = new Map<Sub, number>()
     const to = this.subs.filter((s) => !skip.has(s.sub.endpoint))
     await Promise.all(to.map(async (s) => {

@@ -7,8 +7,11 @@ import { startApp } from '../server/app.ts'
 import type { Push } from '../server/push.ts'
 import type { Alert, UpdateStatus } from '../shared/types.ts'
 import { Emitter, type Source, type SourceEvents } from '../server/source.ts'
+import { web } from '../server/web.ts'
 
 const acted: unknown[] = []
+/** what /api/cli saw as `local` (this app's own page or a program here, not a remote caller) */
+const locals: boolean[] = []
 class Stub extends Emitter<SourceEvents> {
   kind = 'demo' as const
   snapshot() {
@@ -23,6 +26,10 @@ class Stub extends Emitter<SourceEvents> {
   async act(a: unknown) {
     acted.push(a)
     return { ok: true }
+  }
+  async cli(_args: string[], ctx: { local?: boolean }) {
+    locals.push(!!ctx.local)
+    return { out: '', code: 0 }
   }
   async artifact(id: string, v?: number) {
     return id === 'ab12' ? { html: `<h1>v${v ?? 2}</h1>`, data: { n: '</script><script>alert(1)</script>' }, sent: undefined } : undefined
@@ -316,5 +323,78 @@ describe('artifacts', () => {
     expect(t.headers.get('content-type')).toBe('image/png')
     expect((await fetch(`${base}/api/artifacts/zz99`)).status).toBe(404)
     expect((await fetch(`${base}/api/artifacts/zz99/thumb`)).status).toBe(404)
+  })
+})
+
+describe('behind a trusted proxy', () => {
+  const configurable = source as unknown as { web?: () => { proxy: string; publicUrl: string } }
+  const saved = configurable.web
+  afterAll(() => {
+    if (saved) configurable.web = saved
+    else delete configurable.web
+    web.reset()
+  })
+  test("a header from anyone but the named proxy changes nothing, and its host is not believed", async () => {
+    // the name points elsewhere: this test's own connection is not the proxy
+    configurable.web = () => ({ proxy: '10.8.0.1', publicUrl: '' })
+    const host = `127.0.0.1:${server.port}`
+    const spoof = { origin: 'https://evil.example', 'x-forwarded-host': 'evil.example', 'x-forwarded-for': '10.8.0.2', 'x-shepherdr': '1', 'sec-fetch-site': 'same-origin' }
+    expect((await post(spoof)).status).toBe(403)
+    // a browser page at the real address still acts, headers or none
+    expect((await post({ origin: `http://${host}`, 'x-shepherdr': '1', 'sec-fetch-site': 'same-origin', 'x-forwarded-host': 'evil.example' })).status).toBe(200)
+    expect(web.last).toMatchObject({ proxied: false, host })
+    // untrusted forwarded headers still read as a remote caller
+    await fetch(`${base}/api/cli`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '10.8.0.2' }, body: JSON.stringify({ args: ['doctor'] }) })
+    expect(locals.at(-1)).toBe(false)
+  })
+  test("from the named proxy its forwarded host is this app's own page, for the same-origin check and for local:", async () => {
+    configurable.web = () => ({ proxy: '127.0.0.1', publicUrl: '' })
+    const via = { origin: 'https://shep.example.com', 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2', 'x-shepherdr': '1', 'sec-fetch-site': 'same-origin' }
+    expect((await post(via)).status).toBe(200)
+    expect(web.last).toMatchObject({ proxied: true, host: 'shep.example.com', publicUrl: 'https://shep.example.com' })
+    // a proxy that refuses to upgrade is still refused a cross-site WebSocket
+    expect((await fetch(`${base}/api/ws`, { headers: { origin: 'https://evil.example', 'x-forwarded-host': 'shep.example.com', upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13' } })).status).toBe(403)
+    // local: a UI action through the proxy is this app's own page, as a program here is
+    const calls: Record<string, string>[] = [{ 'content-type': 'application/json' }, { 'content-type': 'application/json', 'x-forwarded-for': '10.8.0.2', 'x-forwarded-host': 'shep.example.com' }]
+    for (const headers of calls) {
+      locals.length = 0
+      await fetch(`${base}/api/cli`, { method: 'POST', headers, body: JSON.stringify({ args: ['doctor'] }) })
+      expect(locals).toEqual([true])
+    }
+  })
+  test('a request without forwarded headers behaves as today', async () => {
+    configurable.web = () => ({ proxy: '127.0.0.1', publicUrl: '' })
+    const host = `127.0.0.1:${server.port}`
+    expect((await post({ origin: `http://${host}`, 'x-shepherdr': '1', 'sec-fetch-site': 'same-origin' })).status).toBe(200)
+    expect(web.last).toMatchObject({ proxied: true, host, publicUrl: '' })
+    // a program on this machine, as before
+    locals.length = 0
+    await fetch(`${base}/api/cli`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ args: ['doctor'] }) })
+    expect(locals).toEqual([true])
+  })
+  test('the public address: the trusted host by default, or the one the human set', async () => {
+    const host = `127.0.0.1:${server.port}`
+    configurable.web = () => ({ proxy: '127.0.0.1', publicUrl: 'https://shep.example.com/' })
+    await fetch(`${base}/api/snapshot`, { headers: { host, 'x-forwarded-host': 'inner.example.com', 'x-forwarded-proto': 'https' } })
+    expect(web.base()).toBe('https://shep.example.com')
+    // no explicit address, and no trusted proxy: links stay relative
+    configurable.web = () => ({ proxy: 'off', publicUrl: '' })
+    await fetch(`${base}/api/snapshot`, { headers: { host, 'x-forwarded-host': 'shep.example.com' } })
+    expect(web.base()).toBe('')
+  })
+  test('the live link counts every upgrade it tried, and the ones it refused', async () => {
+    configurable.web = () => ({ proxy: 'off', publicUrl: '' })
+    const before = web.links
+    // a plain GET cannot be upgraded
+    expect((await fetch(`${base}/api/ws`)).status).toBe(400)
+    expect(web.links).toMatchObject({ upgrades: before.upgrades + 1, failures: before.failures + 1 })
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/ws`)
+    const got: { type: string }[] = []
+    ws.onmessage = (e) => got.push(JSON.parse(String(e.data)))
+    await new Promise((r) => (ws.onopen = r))
+    while (!got.some((m) => m.type === 'snapshot')) await new Promise((r) => setTimeout(r, 10))
+    expect(web.links.upgrades).toBe(before.upgrades + 2)
+    expect(web.links.failures).toBe(before.failures + 1)
+    ws.close()
   })
 })

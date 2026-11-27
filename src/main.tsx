@@ -15,15 +15,25 @@ import { watchViewport } from './viewport.ts'
 const topBar = 'shrink-0 bg-bubble px-4 py-1.5 text-center text-[0.8125rem] text-fg2 phone:text-[0.9375rem] [[data-device=phone]>&:first-child]:pt-[calc(env(safe-area-inset-top)+6px)]'
 const barButton = 'relative font-medium text-fg underline after:absolute after:-inset-x-1.5 after:-inset-y-2.5'
 
-/** Lost the link to Shepherdr (no tailnet): say so at the top; the screen keeps what it last showed. */
+/**
+ * Lost the link to Shepherdr (no tailnet), or the page answers while the live link never opens: say so at the top; the
+ * screen keeps what it last showed.
+ */
 function Offline() {
   const offline = useUI((u) => u.offline)
+  const liveDown = useUI((u) => u.liveDown)
   const restarting = useStore((s) => s.update?.state === 'restarting')
-  if (!offline) return null
+  if (!offline && !liveDown) return null
   if (restarting)
     return (
       <div role="status" data-topbar className={topBar}>
         Shepherdr is updating. Back in a moment.
+      </div>
+    )
+  if (!offline)
+    return (
+      <div role="status" data-topbar className={topBar}>
+        Live updates aren't getting through. The proxy in front may not pass WebSockets; the screen stays as it is until they do.
       </div>
     )
   const at = new Date(offline).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
