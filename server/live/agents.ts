@@ -11,7 +11,8 @@ import { dirname, join, relative } from 'node:path'
 import { Emitter } from '../source.ts'
 import { readJson, writeJson } from '../store.ts'
 import type { AgentRuntime, TermScreen } from '../../shared/types.ts'
-import { herdr, Subscription, type AgentInfo, type AgentStatus, type HerdrError, type HerdrEvent } from './herdr.ts'
+import { herdr, Subscription, type AgentInfo, type AgentStatus, type HerdrError, type HerdrEvent, type ProcessInfo } from './herdr.ts'
+import { missingWords, paneProgram, paneState, PaneMissing, waitsForAgent, type PaneLook, type PaneState } from './pane.ts'
 import { ClaudeSessions, Reviewers, screenBackground, sessionBackground, type Background } from './readers/background.ts'
 import { claudeHome, claudeLogPath, findClaudeLog, findCodexLog, findLog, findPiLog, logKind, mainCodexLog } from './readers/find.ts'
 import { effortFor, modelArg } from './models.ts'
@@ -158,6 +159,8 @@ export interface OutItem {
   idle?: boolean
   /** a slash command you typed: Shepherdr follows what it does (commands.ts) */
   command?: boolean
+  /** it met a pane that no longer held the agent: it waits as long as it takes for one that does (no deadline) */
+  awaitsAgent?: boolean
 }
 
 /** what starts an agent: its record, the first thing it is told, and where its pane comes from when it isn't its
@@ -165,8 +168,21 @@ export interface OutItem {
 /** was: the label its workspace had before, renamed in place when that one is still open */
 export type Spec = Omit<AgentRecord, 'logs' | 'started'> & { first?: string; pane?: () => Promise<string>; was?: string; fresh?: boolean }
 
-/** why what you send waits: a menu or permission prompt is up, the agent is starting, or (a CLI command) mid-turn */
+/** why what you send waits: a menu or permission prompt is up, the agent is starting (or its pane no longer holds it),
+ *  or (a CLI command) mid-turn */
 export type Hold = 'menu' | 'start' | 'turn'
+
+/** words meant for an agent met a pane that doesn't hold it: wait for its next run, or say why nothing was typed */
+export type MissingWords = 'hold' | 'refuse'
+
+/** how Shepherdr looks at a pane and types into it: herdr, unless a test says otherwise */
+export interface PaneIO {
+  info(pane_id: string): Promise<ProcessInfo>
+  /** what herdr's agent API types into a named agent's pane, as a message */
+  prompt(target: string, text: string): Promise<unknown>
+  text(pane_id: string, text: string): Promise<unknown>
+  keys(pane_id: string, keys: string[]): Promise<unknown>
+}
 
 export interface SendOpts {
   generation?: string
@@ -223,6 +239,8 @@ export function statusFrom(said: Said | undefined, seen: AgentStatus | 'gone'): 
 /** what a refusal from herdr means for what you send: a menu is up, or the agent just started and herdr doesn't count
  *  it as its named agent yet ("agent shep-all is not an active named agent"); anything else, it can't go in */
 export function holdFrom(e: unknown): Hold | undefined {
+  // its pane fell back to a shell (or is gone): it waits for the agent that starts next
+  if (waitsForAgent(e)) return 'start'
   const code = (e as HerdrError).code
   if (code === 'agent_blocked') return 'menu'
   if (code === 'agent_not_found' || code === 'agent_not_ready' || code === 'agent_not_running') return 'start'
@@ -237,6 +255,15 @@ const SAID_MS = 250
  *  of its lines: <shepherdr><news task="SHE-9" event="merged">…</news></shepherdr>; readers' text is stripped of it */
 export const hidden = (s: string, kind?: string, attrs: Record<string, string> = {}) => tag('shepherdr', {}, kind ? tag(kind, attrs, s) : s)
 export const stripHidden = (s: string) => s.replace(/<shepherdr(?:\s+[\w-]+="[^"]*")*\s*>[\s\S]*?<\/shepherdr>\s*/g, '').trim()
+
+/**
+ * A launch's first words, in the order the agent reads them: the instructions a CLI has no flag for, then what waited
+ * for the agent to be back in its pane, then what the launch itself tells it (a restart's note). The agent hears the
+ * human's words before it acts on the restart, and the held message keeps its own id and bubble.
+ */
+export function launchOpening(instructions: string | undefined, held: OutItem[], first?: string): (string | OutItem)[] {
+  return [...(instructions ? [instructions] : []), ...held, ...(first ? [first] : [])]
+}
 
 export class Agents extends Emitter<Events> {
   records: Record<string, AgentRecord> = readJson('agents.json', {})
@@ -316,6 +343,16 @@ export class Agents extends Emitter<Events> {
   acceptInput?: (item: OutItem) => boolean
   prepare?: (spec: Spec) => Promise<Spec>
   launchAllowed?: (spec: Spec) => void
+
+  /** how it looks at panes and types into them: herdr (herdr.ts), unless a test says otherwise */
+  panes: PaneIO = {
+    info: (pane_id) => herdr.processInfo(pane_id),
+    prompt: (target, text) => herdr.prompt(target, text),
+    text: (pane_id, text) => herdr.paneText(pane_id, text),
+    keys: (pane_id, keys) => herdr.paneKeys(pane_id, keys),
+  }
+  /** its pane no longer holds its agent, so nothing was typed: the source starts it again, once, and tells the chat */
+  missing?: (key: string, state: PaneState | 'unknown', program?: string) => void
 
   constructor() {
     super()
@@ -614,7 +651,7 @@ export class Agents extends Emitter<Events> {
   /** what a screen sent waits only on a menu or a starting agent: one whose agent is gone (or herdr out of reach) for a
    *  while fails */
   checkStranded(now = Date.now()) {
-    const keys = new Set(this.outbox.filter((o) => o.cid && !o.cid.startsWith('requested-news:')).map((o) => o.key))
+    const keys = new Set(this.outbox.filter((o) => o.cid && !o.cid.startsWith('requested-news:') && !o.awaitsAgent).map((o) => o.key))
     for (const key of this.stranded.keys()) if (!keys.has(key)) this.stranded.delete(key)
     for (const key of keys) {
       if (this.reachable && this.status(key) !== 'gone') {
@@ -629,14 +666,15 @@ export class Agents extends Emitter<Events> {
     }
   }
 
-  /** what a screen sent that waits for this agent fails: the screen says why and offers Retry */
-  private fail(key: string, error: string) {
-    const mine = this.outbox.filter((o) => o.key === key && o.cid && !o.cid.startsWith('requested-news:'))
+  /** what a screen sent that waits for this agent fails: the screen says why and offers Retry. `all`: nothing can go
+   *  into its pane (another program holds it), so nothing it holds waits any longer */
+  private fail(key: string, error: string, all = false) {
+    const mine = this.outbox.filter((o) => o.key === key && (o.awaitsAgent ? all : all || (o.cid && !o.cid.startsWith('requested-news:'))))
     if (!mine.length) return
     const now = Date.now()
     this.outbox = this.outbox.filter((o) => !mine.includes(o))
     this.save()
-    this.failures = [...this.failures.filter((f) => now - f.at < 600_000), ...mine.map((o) => ({ key, cid: o.cid!, error, at: now }))]
+    this.failures = [...this.failures.filter((f) => now - f.at < 600_000), ...mine.filter((o) => o.cid).map((o) => ({ key, cid: o.cid!, error, at: now }))]
     this.emit('failed', key)
   }
 
@@ -862,9 +900,19 @@ export class Agents extends Emitter<Events> {
       }
     }
     await this.bindRoute(r, pane)
-    // CLIs without an option for extra instructions get them first, hidden from the chat. Both wait until the CLI is
-    // ready, ahead of what you sent meanwhile (a restart)
-    this.queue(r.key, [r.kind !== 'claude' && r.kind !== 'pi' && (!resume || changedPrompt) && r.system ? hidden(r.system) : '', first ?? ''].filter(Boolean), true)
+    // CLIs without an option for extra instructions get them first, hidden from the chat; what waited for a pane that
+    // no longer held the agent goes in right after them, before what the launch itself tells it. All of it waits until
+    // the CLI is ready, ahead of what you sent meanwhile (a restart)
+    const instructions = r.kind !== 'claude' && r.kind !== 'pi' && (!resume || changedPrompt) && r.system ? hidden(r.system) : undefined
+    const held = this.outbox.filter((o) => o.key === r.key && o.awaitsAgent)
+    const opening = launchOpening(instructions, held, first)
+    if (opening.length) {
+      this.outbox = this.outbox.filter((o) => !held.includes(o))
+      const at = this.outbox.findIndex((o) => o.key === r.key)
+      const items = opening.map((o) => (typeof o === 'string' ? { launchId: r.launchId, id: randomUUID(), key: r.key, text: o, at: Date.now() } : o))
+      this.outbox.splice(at < 0 ? this.outbox.length : at, 0, ...items)
+      this.save()
+    }
     setTimeout(() => this.deliver(r.key), 1000)
     setTimeout(() => this.discoverLog(r.key), 3000)
     setTimeout(() => this.discoverLog(r.key), 15000)
@@ -1056,7 +1104,11 @@ export class Agents extends Emitter<Events> {
       } catch (e) {
         // a menu came up just now, or the agent just started and herdr doesn't take input for it yet: it waits
         hold = holdFrom(e)
-        if (hold === 'start' && !this.unready.has(key)) this.unready.set(key, Date.now())
+        // another program in the pane is the human's own: what was meant for the agent is refused, never queued for it
+        if (e instanceof PaneMissing && (e.state === 'other' || e.state === 'unknown')) throw e
+        // a pane that lost its agent holds what you sent for as long as it takes: no 'not ready yet' deadline
+        if (e instanceof PaneMissing) item.awaitsAgent = true
+        else if (hold === 'start' && !this.unready.has(key)) this.unready.set(key, Date.now())
         if (cid && !hold) throw new Error(`The agent didn't take it: ${(e as Error).message}`)
         /* falls through: it waits */
       }
@@ -1071,21 +1123,27 @@ export class Agents extends Emitter<Events> {
 
   /** one thing into the CLI. A slash command is checked: a CLI may take its Enter for a pick in the list of commands
    *  it shows as you type, so while it still sits in the input, Enter goes again; one that never runs is wiped from
-   *  the input and fails, so the chat says so instead of waiting on it. */
+   *  the input and fails, so the chat says so instead of waiting on it. Nothing goes into a pane that isn't the agent. */
   private async put(key: string, item: OutItem) {
-    await herdr.prompt(this.records[key].name, item.text)
+    await this.requireAgent(key)
+    await this.panes.prompt(this.records[key].name, item.text)
     const pane = item.command && this.info(key)?.pane_id
     if (!pane) return
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
     const read = async () => leftAtPrompt(await herdr.read(pane, 'text', 30).catch(() => ''), item.text)
     // twice, a moment apart: a screen not yet redrawn must not get an Enter that picks from the menu it opened
     const left = async () => (await read()) && (await sleep(this.commandMs / 2), await read())
+    // the pane is looked at again before every key: it may have lost the CLI while the command sat in its input
+    const stillAgent = async () => (await this.paneOf(key))?.state === 'agent'
     for (let i = 0; i < 3; i++) {
       await sleep(this.commandMs)
       if (!(await left())) return
-      if (i < 2) await herdr.paneKeys(pane, ['enter'])
+      if (i < 2) {
+        if (!(await stillAgent())) return
+        await this.panes.keys(pane, ['enter'])
+      }
     }
-    await herdr.paneKeys(pane, Array(item.text.length + 2).fill('backspace')).catch(() => undefined)
+    if (await stillAgent()) await this.panes.keys(pane, Array(item.text.length + 2).fill('backspace')).catch(() => undefined)
     throw new Error(`${item.text.trim().split(/\s/)[0]} didn't run in the terminal.`)
   }
 
@@ -1102,9 +1160,10 @@ export class Agents extends Emitter<Events> {
   async deliver(key: string) {
     if (this.delivering.has(key)) return
     this.delivering.add(key)
+    let next: OutItem | undefined
     try {
       for (;;) {
-        const next = this.outbox.find((o) => o.key === key)
+        next = this.outbox.find((o) => o.key === key)
         if (!next) return void this.unready.delete(key)
         if (next.launchId && next.launchId !== this.records[key]?.launchId || this.acceptInput && !this.acceptInput(next)) { this.outbox = this.outbox.filter((o) => o !== next); this.save(); continue }
         if (next.cid?.startsWith('requested-news:') && this.newsReceipts.includes(next.cid)) {
@@ -1129,6 +1188,18 @@ export class Agents extends Emitter<Events> {
       // a menu came up just now: it goes in once the menu is gone
       const hold = holdFrom(e)
       if (hold === 'menu') return
+      // its pane doesn't hold the agent: it waits as long as it takes for one that does (a task's until its task is
+      // restarted or told to go), so it is not failed on a deadline
+      if (e instanceof PaneMissing) {
+        if (waitsForAgent(e)) {
+          if (next && !next.awaitsAgent) {
+            next.awaitsAgent = true
+            this.save()
+          }
+          return
+        }
+        return this.fail(key, `The agent didn't take it: ${e.message}`, true)
+      }
       // just started, not herdr's named agent yet: tried again on the next refresh, for a while
       if (hold === 'start') {
         const since = this.unready.get(key) ?? Date.now()
@@ -1148,16 +1219,6 @@ export class Agents extends Emitter<Events> {
   failedLately(key: string) {
     const now = Date.now()
     return this.failures.filter((f) => f.key === key && now - f.at < 600_000).map(({ cid, error }) => ({ cid, error }))
-  }
-
-  /** ahead: before what waits for this agent already */
-  private queue(key: string, texts: string[], ahead = false) {
-    if (!texts.length) return
-    const items = texts.map((text) => ({ launchId: this.records[key]?.launchId, id: randomUUID(), key, text, at: Date.now() }))
-    const i = ahead ? this.outbox.findIndex((o) => o.key === key) : -1
-    if (i < 0) this.outbox.push(...items)
-    else this.outbox.splice(i, 0, ...items)
-    this.save()
   }
 
   waiting(key: string) {
@@ -1187,14 +1248,71 @@ export class Agents extends Emitter<Events> {
     this.delivered = [...this.delivered.filter((o) => now - o.at < 600_000), { ...item, at: now }].slice(-200)
   }
 
-  async keys(key: string, keys: string[]) {
+  /** what its pane holds right now: the chat's CLI, a shell, another program, or nothing (gone, or what herdr didn't
+   *  say). Nothing when herdr has no agent for this chat at all. */
+  async paneOf(key: string): Promise<PaneLook | undefined> {
     const a = this.info(key)
-    if (a) await herdr.paneKeys(a.pane_id, keys)
+    if (!a) return undefined
+    const info = await this.panes.info(a.pane_id).catch(() => null)
+    // herdr answering means the pane is no longer there (its agent went with it); out of reach, it said nothing at all
+    if (!info) return { pane_id: a.pane_id, state: this.reachable && Date.now() - this.lastReach < 10_000 ? 'gone' : 'unknown' }
+    return { pane_id: a.pane_id, state: paneState(this.records[key]?.kind ?? a.agent ?? '', info), program: paneProgram(info) }
   }
 
-  async text(key: string, text: string) {
+  /** its pane, checked as the last thing before anything is typed into it: nothing goes into a pane that doesn't hold
+   *  the agent. Throws PaneMissing (the words say why), and asks the source to start the agent again. */
+  private async requireAgent(key: string): Promise<string> {
+    const pane = await this.paneOf(key)
+    if (pane?.state === 'agent') return pane.pane_id
+    const state = pane?.state ?? 'gone'
+    // the words were meant for an agent: the source starts it again (a few tries at most) and says so in the chat
+    this.missing?.(key, state, pane?.program)
+    throw new PaneMissing(state, missingWords(key, state, pane?.program))
+  }
+
+  /** a keypress meant for the CLI on its screen (a menu, a permission, a question). A key means nothing to another
+   *  program or to the agent that starts next, so it is refused, with the words why, rather than held. */
+  async keys(key: string, keys: string[]) {
+    const pane_id = await this.requireAgent(key)
+    await this.panes.keys(pane_id, keys)
+  }
+
+  /** Words meant for the agent, typed into its pane only while the pane holds it. `when` says what happens when it
+   *  doesn't: 'hold' keeps them in its outbox, so the next agent gets them once it is back; 'refuse' throws PaneMissing
+   *  with the words why. Nothing is ever typed into a pane that isn't the agent. */
+  async text(key: string, text: string, when: MissingWords): Promise<'typed' | 'held'> {
+    const pane = await this.paneOf(key)
+    if (pane?.state === 'agent') {
+      await this.panes.text(pane.pane_id, text)
+      return 'typed'
+    }
+    const state = pane?.state ?? 'gone'
+    this.missing?.(key, state, pane?.program)
+    // words wait for the agent that starts next; another program in the pane is the human's own, and is left alone
+    if (when === 'hold' && (state === 'shell' || state === 'gone')) {
+      this.hold(key, text)
+      return 'held'
+    }
+    throw new PaneMissing(state, missingWords(key, state, pane?.program))
+  }
+
+  /** what the app's own terminal panel types: a human drives the pane by hand and sees what it holds, so this one is
+   *  blind on purpose. Never for words meant for an agent (text, keys above). */
+  async typeKeys(key: string, keys: string[]) {
     const a = this.info(key)
-    if (a) await herdr.paneText(a.pane_id, text)
+    if (a) await this.panes.keys(a.pane_id, keys)
+  }
+
+  async typeText(key: string, text: string) {
+    const a = this.info(key)
+    if (a) await this.panes.text(a.pane_id, text)
+  }
+
+  /** words held for its next run: in its outbox as a message of its own, with no launch to belong to, so any agent it
+   *  starts next gets them (with a first message, if the launch brings one) */
+  private hold(key: string, text: string) {
+    this.outbox.push({ id: randomUUID(), key, text, at: Date.now(), awaitsAgent: true })
+    this.save()
   }
 
   /** its terminal's recent lines and the pane's size, so a screen draws them at its real width; the size is read again

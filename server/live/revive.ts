@@ -68,12 +68,13 @@ export class Revivals {
     this.well.delete(key)
   }
 
-  /** seen wrong: 'go' to start it again now, 'give-up' once when its tries are used up, else nothing yet */
-  seen(key: string, now = Date.now()): 'go' | 'give-up' | undefined {
+  /** seen wrong: 'go' to start it again now, 'give-up' once when its tries are used up, else nothing yet. `atOnce`
+   *  skips the grace: a message met the pane without its agent, so waiting will not help */
+  seen(key: string, now = Date.now(), atOnce = false): 'go' | 'give-up' | undefined {
     this.well.delete(key)
     const since = this.wrong.get(key) ?? now
     this.wrong.set(key, since)
-    if (now - since < this.times.grace || this.given.has(key)) return undefined
+    if ((!atOnce && now - since < this.times.grace) || this.given.has(key)) return undefined
     const tries = this.tries.get(key) ?? []
     if (tries.length >= this.times.gaps.length) {
       this.given.add(key)
