@@ -4,6 +4,7 @@
 // An artifact's card is a message too: its quote is its title and version.
 import { getState, setUI } from '@client/kernel.ts'
 import { unfold } from './fold.tsx'
+import { reveal } from './window.ts'
 import { excerpt } from '@shared/excerpt.ts'
 import { artifactQuote, type Chat, type Message, type Question, type ReplyQuote } from '@shared/types.ts'
 
@@ -58,24 +59,40 @@ const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 const lit = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>()
 
 /** scroll a message into view (opened, if it was folded) and light it up for a moment; false when the chat no longer
-    has it. card: its card (a question) rather than its words, with the card's buttons in view */
+    has it. card: its card (a question) rather than its words, with the card's buttons in view. A long chat draws only
+    the messages near what shows: one far from it is asked for (window.ts's reveal), then looked for again as it is
+    drawn, so a jump to it is as good as it was when every message was drawn */
 export function jumpTo(chat: string, id: string, { card = false } = {}) {
   unfold(id)
   const at = `[data-chat="${CSS.escape(chat)}"]`
-  const el = document.querySelector<HTMLElement>(`[data-msg="${CSS.escape(id)}"]${at}`)
-  // a question's card sits beside the message's words (or alone, the CLI's own question)
-  const box = card ? document.querySelector<HTMLElement>(`[data-whole="${CSS.escape(id)}"]${at} [data-card]`) : null
-  const anchor = box ?? el?.querySelector<HTMLElement>('[data-anchor]') ?? el
-  if (!anchor) return false
-  const tall = !!box && box.offsetHeight > innerHeight * 0.7
-  // the chat lets go of its bottom and leaves the scroll alone while it glides there: setting it would stop the glide
-  anchor.dispatchEvent(new Event('chat-jump', { bubbles: true }))
-  ;(box ?? el ?? anchor).scrollIntoView({ block: tall ? 'end' : 'center', behavior: still() ? 'auto' : 'smooth' })
-  anchor.removeAttribute('data-flash')
-  // read layout once, so the light starts over when it is tapped again
-  void anchor.offsetWidth
-  anchor.setAttribute('data-flash', '')
-  clearTimeout(lit.get(anchor))
-  lit.set(anchor, setTimeout(() => anchor.removeAttribute('data-flash'), 1600))
-  return true
+  const find = () => {
+    const el = document.querySelector<HTMLElement>(`[data-msg="${CSS.escape(id)}"]${at}`)
+    // a question's card sits beside the message's words (or alone, the CLI's own question)
+    const box = card ? document.querySelector<HTMLElement>(`[data-whole="${CSS.escape(id)}"]${at} [data-card]`) : null
+    return { el, box }
+  }
+  let tries = 0
+  const land = () => {
+    // asked for now and then while the chat is on its way (a search hit opens it a moment before it is drawn)
+    if (tries % 15 === 0) reveal(chat, id)
+    const { el, box } = find()
+    if (!el) {
+      // drawn in a moment (the window is opening to it), or the chat has not mounted yet: look again
+      if (tries++ < 120 && document.querySelector(at)) requestAnimationFrame(land)
+      return
+    }
+    const anchor = box ?? el.querySelector<HTMLElement>('[data-anchor]') ?? el
+    const tall = !!box && box.offsetHeight > innerHeight * 0.7
+    // the chat lets go of its bottom and leaves the scroll alone while it glides there: setting it would stop the glide
+    anchor.dispatchEvent(new Event('chat-jump', { bubbles: true }))
+    ;(box ?? el ?? anchor).scrollIntoView({ block: tall ? 'end' : 'center', behavior: still() ? 'auto' : 'smooth' })
+    anchor.removeAttribute('data-flash')
+    // read layout once, so the light starts over when it is tapped again
+    void anchor.offsetWidth
+    anchor.setAttribute('data-flash', '')
+    clearTimeout(lit.get(anchor))
+    lit.set(anchor, setTimeout(() => anchor.removeAttribute('data-flash'), 1600))
+  }
+  land()
+  return !!getState().chats[chat]?.messages.some((m) => m.id === id || m.question?.id === id)
 }

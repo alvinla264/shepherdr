@@ -9,6 +9,10 @@ const FOLD_AT = 640
 /** the replies opened (by their message id), kept while the screen is: a chat drawn again keeps them open */
 const opened = new Set<string>()
 
+/** and which of them are too tall to show whole, as each was last measured: a row drawn again (the chat's window draws the
+    ones near what shows) is folded as it was at once, without reading its height while React is still committing */
+const measured = new Map<string, boolean>()
+
 /** open a folded reply, as a jump into it does */
 export function unfold(id: string) {
   if (opened.has(id)) return
@@ -19,12 +23,18 @@ export function unfold(id: string) {
 export function Fold({ id, children }: { id: string; children: ReactNode }) {
   const box = useRef<HTMLDivElement>(null)
   const inner = useRef<HTMLDivElement>(null)
-  const [tall, setTall] = useState(false)
+  const [tall, setTall] = useState(() => measured.get(id) ?? false)
   const [open, setOpen] = useState(() => opened.has(id))
   useLayoutEffect(() => {
     const el = inner.current!
-    const measure = () => setTall(el.offsetHeight > FOLD_AT)
-    measure()
+    const measure = () => {
+      const now = el.offsetHeight > FOLD_AT
+      if (measured.get(id) === now) return
+      measured.set(id, now)
+      setTall(now)
+    }
+    // one drawn for the first time is read now, so nothing tall shows unfolded for a frame; one drawn again knows already
+    if (!measured.has(id)) measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()

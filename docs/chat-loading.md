@@ -108,12 +108,13 @@ It is a modest but real improvement, and it is provable (the numbers above, plus
 opens a 303-message chat, folds every tall reply and checks each message's time against the browser's own). It is not
 the fix: **the screen still freezes for about 0.85 s per update on a chat this size**, because the remaining cost is
 drawing and reconciling ten thousand rows, which no micro-optimisation removes. It buys most where it was aimed: one
-update costs 40 % less main-thread block than before.
+update costs 40 % less main-thread block than before. (Windowing, below, removed that remaining cost.)
 
 ## Candidate fixes, ranked
 
-1. **Draw only what is near the viewport (windowing).** Render a window of messages around the scroll position (say
-   40 above and 40 below), with spacers keeping the scrollbar honest. This is the fix for the stall, not a mitigation:
+1. **Draw only what is near the viewport (windowing).** *Done: see "Windowing" below.* Render a window of messages
+   around the scroll position (say 40 above and 40 below), with spacers keeping the scrollbar honest. This is the fix for
+   the stall, not a mitigation:
    the DOM stops growing with history. Measured proxy: the same payload at 200 messages costs 224 ms to first row,
    90 ms longest block, 4 454 nodes. Estimated: a 15 000-message chat opens in ~0.3 s, updates in <100 ms, heap in
    the tens of MB. Cost: the real work (~200–400 lines) is in the edges the chat already relies on — arrival
@@ -144,19 +145,58 @@ update costs 40 % less main-thread block than before.
 
 ## Recommendation
 
-Do **1 (windowing)** first, then **5** and **4** as cheap follow-ups; keep **2** and **3** as the next step only if
-windowing alone is not enough on the human's real device. Windowing is the only candidate that makes the cost
-independent of how long an agent has been running, which is the actual shape of the problem; the payload and delta
-work reduce bytes but leave the client drawing the same number of rows.
+Do **1 (windowing)** first — done, below — then **5** and **4** as cheap follow-ups; keep **2** and **3** as the next
+step only if windowing alone is not enough on the human's real device, or look at what the profile says now (below).
+Windowing is the only candidate that makes the cost independent of how long an agent has been running, which is the
+actual shape of the problem; the payload and delta work reduce bytes but leave the client drawing the same number of
+rows. What is left after it is the server rebuilding the chat (`chat()` at 74.8 ms for 15 000 messages) and the
+transcript bytes: (5), (4) and then (2)/(3).
 
-Estimated after (1): a chat with 15 000 messages opens in about a third of a second, a live update blocks the main
-thread for under 100 ms, and the DOM stays around 4 000 nodes instead of 315 000.
+## Windowing (the fix)
+
+The chat now draws only the messages near what it shows: 120 at its newest message, and around the scroll position
+otherwise — 40 above what shows and 40 below (`plugins/chat/window.tsx`), with a spacer above and below standing in for
+the rest (`plugins/chat/window.ts`). Rows are keyed, so the React elements of the ones left out are never built; each
+row sends what it measured to the next draw (heights are kept by message key, the list's offset of the first row drawn
+is carried as rows are measured, never recomputed from an average), so what shows stays where it showed, the scrollbar
+stays honest, and a jump to a message or to the bottom lands where it used to. `jumpTo` asks the chat to draw a message
+it cannot find (a search hit, a quote, an alert's link) and looks again as it is drawn.
+
+Same fixture, same machine, Chromium at 390×844, one throwaway server per run, `SHEPHERDR_HOME` under `/tmp`, nice 19:
+
+| | before | after |
+|---|---:|---:|
+| first row painted | 4 075 ms | 306–383 ms |
+| longest main-thread block | 3 873 ms | 138–144 ms |
+| blocking on open | 4 537 ms | 197–261 ms |
+| DOM nodes | 305 253 | 2 691 |
+| JS heap | 146 MB | 14 MB |
+| longest block, one live update | 722–754 ms | 89–104 ms |
+| blocking per live update | 1 281–1 837 ms | 150–163 ms |
+| scrolling 20 screens up | 594 ms longest, 3 007 ms blocking | 0 ms, 0 ms |
+
+The fixture is rebuilt with the shape above but is not byte-for-byte this page's: 5 000 turns, 44.7 MB of log,
+15 000 messages, 3.35 MB payload (this page's was 4.17 MB). Its "before" numbers land where this page's 15 000-message
+column does, which is what makes the comparison worth reading.
+
+**The fold's synchronous read (§4).** It is now taken only for a row drawn for the first time, and a row drawn again
+(the window draws it back as you scroll) is folded at once from what it measured before (`plugins/chat/fold.tsx`).
+Opening the same chat read a row's height 10 000 times, 1 747 ms; it now reads 81, 20 ms. The §4 prototype (let the
+observer alone measure) would therefore buy about 20 ms and still paint a tall reply unfolded for a frame on its first
+draw, which windowing makes *more* visible (rows appear as you scroll), so it stays out.
+
+What holds it: `test/chat-window.test.ts` (the arithmetic), and `test/layout-chat-load.test.ts`, which opens a chat of 400
+messages and checks that only the rows near what shows are drawn, that scrolling to the top draws the oldest, that the
+arrow back to the bottom lands on the newest, that a reply taller than the screen still folds, and that a quote's jump
+to a message far outside the window draws it and lands on it. Every other `layout-*.test.ts` is the net for the rest of
+the chat's edges (they run on GitHub: this machine runs none).
 
 ## What was deliberately not done
 
-- No redesign, no windowing, no API change: the brief asked for an investigation and at most a small provable fix.
+- No redesign, no API change: the investigation's brief asked for an investigation and at most a small provable fix.
 - The fold prototype was measured (longest block 5 166 → 3 052 ms) and then left out: it paints a tall reply unfolded
-  for one frame before the fold is committed, and making that safe belongs with the windowing work.
+  for one frame before the fold is committed. Windowing kept it out (see above), and the per-row read it would save is
+  now 20 ms.
 - The measurement scripts (fixture generator, server bench, Playwright sweep, CPU profile) are throwaway and are not
   committed; the fixture shape and every number above are reproducible from what this page describes.
 - The 95 MB / 2 113-message case from the earlier fix was not re-run; this page uses a 40 MB / 15 000-message fixture

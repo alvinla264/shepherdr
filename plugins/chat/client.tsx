@@ -11,11 +11,12 @@ import { extOf, isImage } from '@shared/files.ts'
 import { modeName, type CardAsk, type Chat, type Message, type Place, type Question, type ReplyQuote, type SecretAsk, type UpdateCard } from '@shared/types.ts'
 import { buzz, mine, openBar, openPicker, quick, react } from '@plugins/reactions/client.tsx'
 import { EDGE } from '@client/gestures.ts'
-import { still, useArrive } from '@client/motion.ts'
+import { still } from '@client/motion.ts'
 import { draggingFiles, dropped, named, pasted } from './paste.ts'
 import { dayLabel } from './days.ts'
 import { FindBar, openFind } from './find.tsx'
 import { Fold } from './fold.tsx'
+import { Window, type RowInfo } from './window.tsx'
 import { Markdown } from './markdown.tsx'
 import { answeredBy, cancelReply, canReply, isArtifact, jumpTo, startReply } from './reply.ts'
 import { typing, working } from './typing.ts'
@@ -1201,10 +1202,10 @@ const Messages = memo(function Messages({ chat, from }: { chat: Chat; from: stri
     parts.forEach((msg, i) => items.push({ at: out.at, msg, out, last: i === parts.length - 1 }))
   }
   // pictures sent together (they share their time) sit side by side, like an album
-  const rows: Item[] = []
+  const lines: Item[] = []
   for (const it of items) {
-    const last = rows.at(-1)
-    if (!('msg' in it) || !isPicture(it.msg)) rows.push(it)
+    const last = lines.at(-1)
+    if (!('msg' in it) || !isPicture(it.msg)) lines.push(it)
     else {
       const m = it.msg
       const prev = last && 'album' in last ? last.album.at(-1)! : null
@@ -1212,42 +1213,54 @@ const Messages = memo(function Messages({ chat, from }: { chat: Chat; from: stri
         const album = last as Extract<Item, { album: Message[] }>
         album.album.push(m)
         album.last = it.last
-      } else rows.push({ at: it.at, album: [m], out: it.out, last: it.last })
+      } else lines.push({ at: it.at, album: [m], out: it.out, last: it.last })
     }
   }
-  const newAt = useContext(NewAt)
-  // a message just sent, or just in, rises into place
-  const list = useRef<HTMLDivElement>(null)
-  useArrive(list, chat.key)
+  // each row as a fact first (a chat of 15 000 messages is walked in a few ms): where it starts a day, where the New line
+  // goes, its key, and the ids it holds. Only the rows near what shows are drawn from them (window.tsx)
+  const rows: RowInfo[] = []
   let day = ''
+  for (const it of lines) {
+    const at = it.at > 1e12 ? it.at : 0
+    const d = at ? new Date(at).toDateString() : day
+    const dated = !!at && d !== day
+    day = d
+    const first = 'album' in it ? it.album[0].id : it.msg.id
+    const key = keyOf('album' in it ? it.album[0] : it.msg)
+    rows.push({ key, at, first, dated, ids: 'album' in it ? it.album.map((m) => m.id) : it.msg.id !== key ? [it.msg.id] : undefined })
+  }
+  const newAt = useContext(NewAt)
+  const list = useRef<HTMLDivElement>(null)
+  const draw = (i: number) => {
+    const it = lines[i]
+    const f = rows[i]
+    return (
+      <Fragment key={f.key}>
+        {f.dated ? <DateLine at={f.at} /> : null}
+        {newAt === f.first ? <NewLine /> : null}
+        <Row at={f.at} arrive={f.key}>
+          {'album' in it ? (
+            <Album msgs={it.album} chat={chat} from={from} out={it.out} last={it.last} />
+          ) : (
+            <Bubble msg={it.msg} chat={chat} from={from} out={it.out} last={it.last} />
+          )}
+        </Row>
+      </Fragment>
+    )
+  }
   return (
     // a finger sliding a message left moves them all (--peek), and each one's time comes in at the right, like iMessage
     <div ref={list} data-messages className="mx-auto flex w-full max-w-read flex-1 flex-col gap-3.5 px-5 pt-5 pb-3 phone:px-4">
       {!rows.length ? <Empty className="p-0!">No messages yet. Write to start.</Empty> : null}
-      {rows.map((it) => {
-        const at = it.at > 1e12 ? it.at : 0
-        const d = at ? new Date(at).toDateString() : day
-        const dated = !!at && d !== day
-        day = d
-        const first = 'album' in it ? it.album[0].id : it.msg.id
-        const key = keyOf('album' in it ? it.album[0] : it.msg)
-        return (
-          <Fragment key={key}>
-            {dated ? <DateLine at={at} /> : null}
-            {newAt === first ? <NewLine /> : null}
-            <Row at={at} arrive={key}>
-              {'album' in it ? (
-                <Album msgs={it.album} chat={chat} from={from} out={it.out} last={it.last} />
-              ) : (
-                <Bubble msg={it.msg} chat={chat} from={from} out={it.out} last={it.last} />
-              )}
-            </Row>
-          </Fragment>
-        )
-      })}
-      {registry.chatTail.map(({ View }, i) => (
-        <View key={i} chat={chat} from={from} />
-      ))}
+      <Window
+        chat={chat.key}
+        list={list}
+        rows={rows}
+        draw={draw}
+        tail={registry.chatTail.map(({ View }, i) => (
+          <View key={i} chat={chat} from={from} />
+        ))}
+      />
     </div>
   )
 })

@@ -732,7 +732,9 @@ describe.skipIf(!browser)('typing in the message box', () => {
     await page.goto(`http://127.0.0.1:${app.port}/?place=${encodeURIComponent(gtm.id)}`)
     const box = page.locator('textarea[name=message]')
     await box.waitFor()
-    await page.waitForFunction(() => document.querySelectorAll('[data-messages] [data-msg]').length >= 400)
+    // the chat opens at its newest message, and draws only the messages near it (window.tsx): the last of the 400 is
+    // in, and what the box costs a letter no longer passes over every message drawn
+    await page.locator('[data-msg="long-399"]').waitFor()
     // places and tasks show beside the chat
     expect(await page.locator('#places').isVisible()).toBe(true)
     await box.click()
@@ -745,10 +747,10 @@ describe.skipIf(!browser)('typing in the message box', () => {
     const after = await metrics()
     const perKey = (k: string) => ((after[k] - before[k]) * 1000) / text.length
     expect(await box.inputValue()).toBe(text)
-    // the box grows with its words inside a grid row of a fixed height: the columns beside it (and the 400 messages
-    // above it) aren't measured again. It was 30 ms and more a letter when the row sized itself to its content
+    // the box grows with its words inside a grid row of a fixed height: the columns beside it (and the messages above
+    // it) aren't measured again. It was 30 ms and more a letter when the row sized itself to its content
     expect(perKey('LayoutDuration')).toBeLessThan(5)
-    // and no letter restyles or lays out more than a few dozen of the page's 11,000 elements. Counted, not timed: a
+    // and no letter restyles or lays out more than a few dozen of the page's elements. Counted, not timed: a
     // busy runner takes twice as long over the same work (10 ms of script and style a letter on CI, 6 here). The
     // first key once restyled them all, for the keyboard's rings (data-keys on <html>)
     await box.fill('')
