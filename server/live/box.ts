@@ -107,13 +107,30 @@ export function spawnOn(b: BoxInfo, argv: string[], o: { extra?: string[]; stdin
   return Bun.spawn(sshArgs(b.target, script(b, argv), { extra: o.extra }), { stdin: o.stdin ?? 'ignore', stdout: 'pipe', stderr: 'pipe' })
 }
 
+/** the five commands the live-session guard stands in for: one file each in bin/guard, named as the command */
+export const GUARD_COMMANDS = ['systemctl', 'pkill', 'killall', 'herdr', 'shepherdr'] as const
+
+/** the guard's directory: the five commands that can take the live session down, with the few invocations that
+ *  would refused (bin/guard, docs/guard.md). It goes first on every agent's PATH */
+export const guardDir = (bin: string) => join(bin, 'guard')
+
+/** a PATH with the guard first, and the PATH it guards beside it: SHEPHERDR_GUARD_PATH is where each wrapper finds the
+ *  real command (never itself), the agent's own PATH untouched */
+export function guarded(dir: string, path: string): Record<string, string> {
+  return { PATH: `${dir}:${path}`, SHEPHERDR_GUARD_PATH: path }
+}
+
 /** who an agent is to the shepherdr command, and where that command is: here Shepherdr's own bin and server; on
  *  another machine the helper's bin first on its own PATH (its command finds the way back by itself) */
 export function agentEnv(chat: string, root: string): Record<string, string> {
   const credential = { SHEPHERDR_SECRET_FILE: join(helperDir(BOX?.home ?? homedir()), 'credentials', secretFileId(chat)) }
-  if (BOX) return { ...credential, SHEPHERDR_CHAT: chat, SHEPHERDR_URL: '', SHEPHERDR_COMMAND: join(helperDir(BOX.home), 'bin', 'shepherdr'), SHEPHERDR_MACHINE: BOX.label, PATH: BOX.path }
+  if (BOX) {
+    const bin = join(helperDir(BOX.home), 'bin')
+    return { ...credential, SHEPHERDR_CHAT: chat, SHEPHERDR_URL: '', SHEPHERDR_COMMAND: join(bin, 'shepherdr'), SHEPHERDR_MACHINE: BOX.label, ...guarded(guardDir(bin), BOX.path) }
+  }
   // The listening live server owns these agents, never an inherited CLI target (which may be a demo).
-  return { ...credential, SHEPHERDR_CHAT: chat, SHEPHERDR_COMMAND: join(root, 'bin', 'shepherdr'), SHEPHERDR_URL: `http://127.0.0.1:${readJson<{ port?: number }>('server.json', {}).port ?? process.env.SHEPHERDR_PORT ?? 7787}`, PATH: `${join(root, 'bin')}:${process.env.PATH ?? ''}` }
+  const bin = join(root, 'bin')
+  return { ...credential, SHEPHERDR_CHAT: chat, SHEPHERDR_COMMAND: join(bin, 'shepherdr'), SHEPHERDR_URL: `http://127.0.0.1:${readJson<{ port?: number }>('server.json', {}).port ?? process.env.SHEPHERDR_PORT ?? 7787}`, ...guarded(guardDir(bin), `${bin}:${process.env.PATH ?? ''}`) }
 }
 
 /** a port on the box, reached here: a local port forwarded over SSH to its 127.0.0.1 (a browser's stream, its

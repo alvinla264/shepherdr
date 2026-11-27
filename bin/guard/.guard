@@ -1,0 +1,247 @@
+#!/bin/sh
+# The live-session guard. Shepherdr puts this directory first on every agent's PATH (server/live/box.ts, agentEnv), so
+# an agent's shell finds these wrappers before the real commands. Each wrapper stands in for one command, named by its
+# own file name (systemctl, pkill, killall, herdr, shepherdr):
+#
+#   - the few invocations that stop, restart, mask or kill the live herdr/Shepherdr session are refused, in one plain
+#     line naming who refused it and pointing at the human;
+#   - everything else passes to the real command untouched (the same arguments), found with `command -v` against the
+#     PATH this wrapper guards (SHEPHERDR_GUARD_PATH, set at launch).
+#
+# It is a seatbelt, not a boundary: a shell can still `kill -9 <pid>`, run a command by its full store path, or clear
+# PATH. Docs/guard.md says what it does and does not cover.
+#
+# No Python, no hardcoded store paths, and no external helper before the command: sh builtins, a subshell to find the
+# real command, then exec.
+
+# guard_verdict COMMAND [ARGUMENT ...]: pure. Given a command and its arguments it sets guard_reason and returns 1 when
+# the invocation would take the live session down, 0 otherwise. It runs nothing and reads nothing.
+guard_verdict() {
+  guard_verdict_cmd=$1
+  shift
+  guard_reason=
+  case $guard_verdict_cmd in
+    systemctl) guard_systemctl "$@" ;;
+    pkill | killall) guard_kill "$guard_verdict_cmd" "$@" ;;
+    herdr) guard_herdr "$@" ;;
+    shepherdr) guard_shepherdr "$@" ;;
+    *) return 0 ;;
+  esac
+}
+
+# systemctl: stopping, restarting, masking or killing a unit of the live session (herdr-core, Shepherdr), or every unit
+guard_systemctl() {
+  guard_verb=
+  guard_unit=
+  guard_now=
+  for guard_arg in "$@"; do
+    case $guard_arg in
+      stop | restart | try-restart | condrestart | force-reload | reload-or-restart | reload-or-try-restart | try-reload-or-restart | kill | mask | isolate)
+        [ -n "$guard_verb" ] || guard_verb=$guard_arg
+        ;;
+      --all)
+        guard_unit=--all
+        ;;
+      --now)
+        guard_now=1
+        ;;
+      -* | *=*) : ;;
+      *\** | *\?* | *\[*) guard_unit=$guard_arg ;;
+      *herdr* | *Herdr* | *HERDR* | hc-* | default.target | multi-user.target | graphical.target | rescue.target | emergency.target)
+        guard_unit=$guard_arg
+        ;;
+    esac
+  done
+  # --now carries the stop with it
+  if [ -z "$guard_verb" ] && [ -n "$guard_now" ]; then
+    case " $* " in
+      *" disable "* | *" reenable "*) guard_verb='stop' ;;
+    esac
+  fi
+  [ -n "$guard_verb" ] && [ -n "$guard_unit" ] || return 0
+  guard_reason="would $guard_verb the live herdr/Shepherdr unit $guard_unit"
+  return 1
+}
+
+# pkill and killall: killing the server or herdr by name, or by a pattern that reaches them
+guard_kill() {
+  guard_kind=$1
+  shift
+  guard_names=
+  guard_user=
+  guard_value=
+  # options first: which of the words are names or patterns, and whether one of them is a whole user's processes
+  for guard_arg in "$@"; do
+    if [ -n "$guard_value" ]; then
+      guard_value=
+      continue
+    fi
+    case $guard_arg in
+      -u | --user | -U) guard_user=1; guard_value=option ;;
+      -u?* | -[!-]*u?*) guard_user=1 ;;
+      --user=*) guard_user=1 ;;
+      -P | --parent | -s | --signal | -t | --terminal | -G | --pgroup | -F | --pidfile | -Z | --context) guard_value=option ;;
+      --*=*) : ;;
+      -*) : ;;
+    esac
+  done
+  # then every name or pattern it is given (killall takes several): one that reaches the live session refuses the lot
+  guard_value=
+  for guard_arg in "$@"; do
+    if [ -n "$guard_value" ]; then
+      guard_value=
+      continue
+    fi
+    case $guard_arg in
+      -u | --user | -U | -P | --parent | -s | --signal | -t | --terminal | -G | --pgroup | -F | --pidfile | -Z | --context) guard_value=option ;;
+      -* | --*=* | -u?* | -[!-]*u?*) : ;;
+      *) guard_names=1; guard_kill_one "$guard_kind" "$guard_arg" || return 1 ;;
+    esac
+  done
+  # killall -u alvin with no name kills every process that user has, the live server among them
+  if [ -n "$guard_user" ] && [ -z "$guard_names" ]; then
+    guard_reason="would $guard_kind every process of a user, the live server among them"
+    return 1
+  fi
+  return 0
+}
+
+# one name or pattern: does it reach the live session?
+guard_kill_one() {
+  guard_kind=$1
+  guard_pattern=$2
+  # a pattern of nothing but wildcards and punctuation names no process: it reaches all of them
+  case $guard_pattern in
+    *[A-Za-z0-9]*) : ;;
+    *)
+      guard_reason="would $guard_kind every process ('$guard_pattern' names no process)"
+      return 1
+      ;;
+  esac
+  # pkill's pattern is a regular expression and killall -r's too: a word that runs, or lies next to, the live session
+  case $guard_pattern in
+    *herdr* | *Herdr* | *HERDR* | *shepherdr* | *server/main* | *main.ts* | *cli.ts* | *supervise.ts* | *plugin.ts* | *bun* | *node* | *perl*)
+      guard_reason="would $guard_kind processes by '$guard_pattern', which can reach the live session (use a narrower pattern)"
+      return 1
+      ;;
+  esac
+  # and a bare name that is the live server or herdr
+  case $guard_pattern in
+    bun | node | perl | sh | bash | dash | zsh | systemd | systemctl | herdr | herdr-core | shepherdr | hc-*)
+      guard_reason="would $guard_kind processes by '$guard_pattern', which is the live server or herdr"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# herdr: its own update, and its server or a session stopped or deleted (what runs Shepherdr)
+guard_herdr() {
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --session | --machine | --remote)
+        shift
+        [ $# -gt 0 ] && shift
+        continue
+        ;;
+      -*) shift; continue ;;
+    esac
+    break
+  done
+  guard_sub=${1-}
+  guard_next=${2-}
+  case $guard_sub in
+    update)
+      guard_reason='would install a new herdr over the one running Shepherdr'
+      return 1
+      ;;
+    start | stop | restart)
+      guard_reason="would $guard_sub the herdr session that runs Shepherdr"
+      return 1
+      ;;
+    server)
+      if [ "$guard_next" = stop ]; then
+        guard_reason='would stop the herdr server that runs Shepherdr'
+        return 1
+      fi
+      ;;
+    session)
+      case $guard_next in
+        stop | delete)
+          guard_reason="would $guard_next a herdr session, the live one included"
+          return 1
+          ;;
+      esac
+      ;;
+  esac
+  return 0
+}
+
+# shepherdr: what installs over, migrates or moves the live home, and what changes its secrets
+guard_shepherdr() {
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --url | --space | --machine | --home) shift; [ $# -gt 0 ] && shift; continue ;;
+      --url=* | --space=* | --machine=* | --home=*) shift; continue ;;
+    esac
+    break
+  done
+  case ${1-} in
+    install | update | uninstall | migrate | web | secrets)
+      guard_reason="would $1 this machine's live Shepherdr home"
+      return 1
+      ;;
+    secret)
+      case ${2-} in
+        set | rm | elevenlabs)
+          guard_reason="would change the live Shepherdr home's secrets (shepherdr secret $2)"
+          return 1
+          ;;
+      esac
+      ;;
+  esac
+  return 0
+}
+
+# the real command, found against the PATH set before this directory was put first; never this wrapper itself
+guard_real() {
+  guard_command=$1
+  guard_wrapper=$2
+  [ -n "${SHEPHERDR_GUARD_PATH-}" ] || return 1
+  guard_found=$(PATH=$SHEPHERDR_GUARD_PATH command -v "$guard_command") || return 1
+  [ -n "$guard_found" ] || return 1
+  # a PATH that still holds this directory would find this wrapper again
+  case $guard_found in
+    "$guard_wrapper" | "${guard_wrapper%/*}"/*) return 1 ;;
+  esac
+  printf '%s' "$guard_found"
+}
+
+# one plain line, even when an argument carries a newline of its own (sh alone: no tr to miss on a bare PATH)
+guard_refuse() {
+  guard_line=
+  while IFS= read -r guard_part; do
+    guard_line=${guard_line:+$guard_line }$guard_part
+  done <<EOF
+guard: ${SHEPHERDR_CHAT:-an agent} refused: $guard_verdict_cmd $* $guard_reason. The human can run it; ask them.
+EOF
+  printf '%s\n' "$guard_line" >&2
+}
+
+guard_main() {
+  guard_self=$0
+  guard_verdict "${guard_self##*/}" "$@" || {
+    guard_refuse "$@"
+    exit 1
+  }
+  guard_found=$(guard_real "$guard_verdict_cmd" "$guard_self") || {
+    printf '%s\n' "guard: ${SHEPHERDR_CHAT:-an agent}: cannot find the real $guard_verdict_cmd (it is not installed here, or SHEPHERDR_GUARD_PATH does not name where it is); nothing ran. The human can run it." >&2
+    exit 127
+  }
+  exec "$guard_found" "$@"
+}
+
+# sourced by a test (its own $0, not one of the five names): only the policy, nothing runs
+case ${0##*/} in
+  systemctl | pkill | killall | herdr | shepherdr) guard_main "$@" ;;
+esac
