@@ -10,6 +10,7 @@ import type { Action, AddSpace, ServerEvent, UpdateStatus, WorktreeAsk } from '.
 import { frameResponse, wrapPage } from './frame.ts'
 import type { Source } from './source.ts'
 import type { Push } from './push.ts'
+import { web, webShape } from './web.ts'
 
 type Sock =
   /** visible: the screen is on; push: its push subscription, which gets no alerts while the screen is on */
@@ -113,11 +114,34 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
       const at = url.pathname.indexOf('/api/')
       const path = at >= 0 ? url.pathname.slice(at) : url.pathname
       const q = url.searchParams
+      // the shape this request came through: the peer address is the only thing a trust decision rests on, never a header
+      const cfg = source.web?.() ?? { proxy: 'off', publicUrl: '' }
+      const shape = webShape(req, srv.requestIP(req)?.address, cfg)
+      // a browser names itself (Origin, Fetch Metadata); a program here (the command channel, a health check) does not
+      const browser = ['origin', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-site'].some((h) => req.headers.has(h))
+      web.see(shape, cfg, browser)
+
+      // A page whose HTTP answers but whose socket cannot open reports it (the proxy refused the upgrade before it got
+      // here). It only raises a counter, changes nothing else, and is throttled, so it is accepted before the guard:
+      // the very mismatch the report is about is one the guard would refuse.
+      if (path === '/api/live-failed' && req.method === 'POST') {
+        web.refusedByProxy()
+        return json({ ok: true })
+      }
 
       // only this app's own pages may act: another website in your browser can't (no cross-site requests)
-      if (path.startsWith('/api/') && path !== '/api/font/InterVariable.woff2' && !sameSite(req, path)) return new Response('forbidden', { status: 403 })
+      if (path.startsWith('/api/') && path !== '/api/font/InterVariable.woff2' && !sameSite(req, path, shape.host)) {
+        // a live link the same-origin check turns away is a refused upgrade too, not an untried one
+        if (path === '/api/ws') web.upgrade(false)
+        return new Response('forbidden', { status: 403 })
+      }
 
-      if (path === '/api/ws') return srv.upgrade(req, { data: { kind: 'live', chats: [], term: null, visible: false, push: null } }) ? undefined : new Response('upgrade failed', { status: 400 })
+      if (path === '/api/ws') {
+        // counted, so a proxy that refuses to upgrade says so in shepherdr doctor instead of looking like a frozen screen
+        const up = srv.upgrade(req, { data: { kind: 'live', chats: [], term: null, visible: false, push: null } })
+        web.upgrade(!!up)
+        return up ? undefined : new Response('upgrade failed', { status: 400 })
+      }
       if (path === '/api/voice') return srv.upgrade(req, { data: { kind: 'voice', chat: q.get('chat') ?? '' } }) ? undefined : new Response('upgrade failed', { status: 400 })
       if (path === '/api/browser') {
         if (!source.browser) return new Response('no browser here', { status: 404 })
@@ -201,7 +225,7 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
           const b = (await req.json()) as { args: string[]; chat?: string; cwd?: string; stdin?: string }
           // some commands wait long (shepherdr checks waits for GitHub's): no idle cut-off for these
           srv.timeout(req, 0)
-          return json(await cli.call(source, b.args ?? [], { chat: b.chat, cwd: b.cwd, stdin: b.stdin, local: direct(req), proof: req.headers.get('authorization')?.match(/^Bearer ([a-f0-9]{64})$/)?.[1] }))
+          return json(await cli.call(source, b.args ?? [], { chat: b.chat, cwd: b.cwd, stdin: b.stdin, local: direct(req, shape.proxied), proof: req.headers.get('authorization')?.match(/^Bearer ([a-f0-9]{64})$/)?.[1] }))
         }
         if (path === '/api/push/key') return json({ key: push?.publicKey ?? null })
         // what waits on you: the service worker sets the app icon's count with it after a notification button answers
@@ -301,10 +325,11 @@ function running() {
  * A browser always names the page a request comes from (Origin) on a POST and a WebSocket; it must be this app's own
  * address. Requests without an Origin come from programs (the shepherdr command, another machine's copy), not from a
  * website. A browser POST must also carry the app's own header, which a cross-site form or no-cors request can't set.
+ * `host` is the host this app is really known by: the caller passes the one webShape resolved, so X-Forwarded-Host
+ * counts only from the configured proxy. An arbitrary client's header never changes this check.
  */
-export function sameSite(req: Request, path: string): boolean {
+export function sameSite(req: Request, path: string, host = req.headers.get('host') ?? ''): boolean {
   const origin = req.headers.get('origin')
-  const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? ''
   if (origin !== null) {
     let ok = false
     try {
@@ -323,8 +348,14 @@ export function sameSite(req: Request, path: string): boolean {
   return true
 }
 
-/** Legacy routing hint only. Headers do not authenticate a caller; secret access requires a capability. */
-export const direct = (req: Request) => !['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-user-login', 'origin'].some((h) => req.headers.has(h))
+/**
+ * Legacy routing hint only (what `local:` is for `shepherdr` commands). Headers do not authenticate a caller; secret
+ * access requires a capability. `proxied`: the connection came from the configured proxy, so its forwarded headers
+ * mean this app's own page, and it counts as local as a program here does. Forwarded headers from anyone else change
+ * nothing: they still read as a remote caller.
+ */
+export const direct = (req: Request, proxied = false) =>
+  proxied || !['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-user-login', 'origin'].some((h) => req.headers.has(h))
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',

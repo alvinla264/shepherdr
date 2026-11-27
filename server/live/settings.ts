@@ -17,6 +17,7 @@ import type { SetBy } from '../../shared/brief.ts'
 import { settingsBlock, settingsLines, SEVERITIES, type Said, type Ways } from './prompts.ts'
 import { effortFor, effortsOf, findModel, knowsModels, LEVELS, modelsOf } from './models.ts'
 import { eventRules, eventsText, eventWords, nextWords, OWN_ZONE, timeRule, timeWords, validZone, type EventRule } from './trigger.ts'
+import { proxyError, publicUrlError, type WebConfig } from '../web.ts'
 
 /** every agent kind herdr can start (interactive chat requires runtime log discovery and a reader) */
 const FALLBACK_KINDS = ['pi', 'claude', 'codex', 'gemini', 'cursor', 'devin', 'agy', 'cline', 'omp', 'mastracode', 'opencode', 'copilot', 'kimi', 'kiro', 'droid', 'amp', 'grok', 'hermes', 'kilo', 'qodercli', 'qwen', 'letta', 'maki', 'muse']
@@ -236,6 +237,17 @@ export const CATALOG: Section[] = [
       { group: 'Tell its coordinator when', label: 'Memory is over', key: 'machine.alertMemory', value: '90%', num: { ...PCT, off: true } },
       { group: 'Tell its coordinator when', label: 'Disk is over', key: 'machine.alertDisk', value: '90%', num: { ...PCT, off: true } },
       { group: 'Tell its coordinator when', label: 'herdr stops answering', key: 'machine.alertHerdr', value: 'on', options: ['on', 'off'] },
+    ],
+  },
+  {
+    // how a browser reaches the app: a proxy in front (nginx, Caddy) whose forwarded headers are believed, and the
+    // address links use. Each machine has its own proxy; Everywhere covers the rest
+    name: 'Web',
+    levels: ['all', 'machine'],
+    about: 'How a browser reaches Shepherdr. Set the proxy named here, and forwarded headers count only from its address; off, no header is believed. Public address is the link alerts use; empty, the proxy\'s host.',
+    rows: [
+      { label: 'Trusted proxy', key: 'web.proxy', value: 'off', text: true },
+      { label: 'Public address', key: 'web.publicUrl', value: '', text: true },
     ],
   },
   {
@@ -505,6 +517,11 @@ export class Settings {
     return this.pick('time.zone', 'all').value
   }
 
+  /** the proxy whose forwarded headers are believed at this machine, and the address links use */
+  web(): WebConfig {
+    return { proxy: this.get('web.proxy'), publicUrl: this.get('web.publicUrl') }
+  }
+
   /** how long a task's shared browser may sit idle before it closes, in ms, at a level; null: it never does */
   idleClose(l: Level = 'machine'): number | null {
     const n = Number.parseFloat(this.pick('browser.idleClose', l).value)
@@ -748,6 +765,8 @@ export function refuse(key: string, value: string): string | undefined {
     }
   }
   if (key === 'time.zone' && !validZone(value.trim())) return `${value} is no time zone: write one like Europe/Stockholm.`
+  if (key === 'web.proxy') return proxyError(value)
+  if (key === 'web.publicUrl') return publicUrlError(value)
   if (num && numValue(num, value) === undefined) return `Write a number from ${num.min} to ${num.max}${num.step ? '' : ' (whole)'}${num.unit ? `, in ${num.unit}` : ''}${num.off ? ', or off' : num.zero ? ' (0 is off)' : ''}.`
   const options = ROWS.find((r) => r.key === key)?.options
   if (options && !cli && key !== 'reviewer.agent' && key !== 'alerts' && key !== 'task.fallback' && !options.includes(value)) return `Pick one of: ${options.join(' · ')}.`

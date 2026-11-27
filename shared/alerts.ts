@@ -145,12 +145,16 @@ export function notifies(snap: Pick<Snapshot, 'settings'>, a: Pick<Alert, 'go' |
   return n === 'All' || (n === 'Needs me' && !a.message)
 }
 
-/** where a tap on an alert opens: the place, the task and the card to bring into view */
-export function alertUrl(go: Alert['go']) {
+/**
+ * where a tap on an alert opens: the place, the task and the card to bring into view. Relative to the app's own page
+ * by default; `base` is the address the app is known by behind a trusted proxy ("https://shep.example.com"), so a
+ * notification raised on another copy still opens the domain rather than whatever host it knew.
+ */
+export function alertUrl(go: Alert['go'], base = '') {
   const q = new URLSearchParams({ place: go.place })
   if (go.task) q.set('task', go.task)
   if (go.focus) q.set('focus', go.focus)
-  return `./?${q}`
+  return base ? `${base.replace(/\/+$/, '')}/?${q}` : `./?${q}`
 }
 
 /** what the service worker gets */
@@ -178,7 +182,7 @@ const cut = (text: string, n: number) => {
   return chars.length > n ? `${chars.slice(0, n - 1).join('').trimEnd()}…` : text
 }
 
-export function pushPayload(a: Alert, w: { count: number; tags: string[] }): PushPayload {
+export function pushPayload(a: Alert, w: { count: number; tags: string[] }, base = ''): PushPayload {
   const title = a.from === 'Shepherdr' ? a.title : `${a.from}: ${a.title}`
   return {
     id: a.id,
@@ -186,7 +190,7 @@ export function pushPayload(a: Alert, w: { count: number; tags: string[] }): Pus
     body: cut(a.body, BODY_MAX),
     tag: a.tag ?? a.id,
     ...(a.tag ? { waits: true as const } : {}),
-    url: alertUrl(a.go),
+    url: alertUrl(a.go, base),
     badge: w.count,
     open: w.tags,
     ...(a.card?.choices.length

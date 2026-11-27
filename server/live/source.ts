@@ -54,6 +54,7 @@ import { Unread } from './unread.ts'
 import { Monitor, meters, procLines, summary, topProcs, type HealthEvent, type Kind } from './health.ts'
 import { has, PLUGIN_KEY, pluginSection, setPluginOn } from '../plugins.ts'
 import { TOOK_OVER, type TookOver } from '../../scripts/take-over.ts'
+import { web, webLine, type WebConfig } from '../web.ts'
 
 function userName(): string {
   const set = readJson<{ user?: string }>('config.json', {}).user
@@ -136,6 +137,10 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
   private sweptAt = 0
   devices: () => string[] = () => []
   pushWarnings: () => string[] = () => []
+  /** the proxy whose forwarded headers are believed here, and the address links use (Settings → Web) */
+  web(): WebConfig {
+    return this.settings.web()
+  }
   /** the main machine runs every other machine saved in herdr, each from a worker of its own (machines.ts); a worker
    *  is one of those (box.ts) */
   peers: Machines | null = BOX ? null : new Machines(process.env.NODE_ENV === 'test' ? null : undefined)
@@ -2575,7 +2580,7 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
       case 'doctor': {
         if (BOX) throw new Error(`shepherdr doctor checks every machine from the main one: run it there (${HOST} is run from it over SSH).`)
         const own = `${NAME} (this machine, the main one): herdr ${this.agents.reachable ? 'answers' : 'does not answer'}${this.browsers ? `; shared browser ${this.browsers.status().ready ? 'ready' : this.browsers.status().hint}` : ''}`
-        return [own, ...this.pushWarnings().map((warning) => `Alerts: ${warning}`), ...((await this.peers?.doctor()) ?? [])].join('\n')
+        return [own, webLine(this.settings.web(), web.last, web.links, age, web.base()), ...this.pushWarnings().map((warning) => `Alerts: ${warning}`), ...((await this.peers?.doctor()) ?? [])].join('\n')
       }
       case 'secret': {
         if (a1 !== 'elevenlabs') return this.secretCommand(a1, rest, p, ctx)

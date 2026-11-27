@@ -11,6 +11,7 @@ const { parseMenu } = await import('../server/live/chats.ts')
 const { Automations } = await import('../server/live/automations.ts')
 const T = await import('../server/live/trigger.ts')
 const { CATALOG, Settings, effortFor, setForTask } = await import('../server/live/settings.ts')
+const { isProxy, parseProxy, webLine, webShape } = await import('../server/web.ts')
 const { readBrief } = await import('../shared/brief.ts')
 const { Heartbeats, heartbeatFile } = await import('../server/live/heartbeat.ts')
 const { coordinatorPrompt, settingsBlock, splitBrief, taskPrompt } = await import('../server/live/prompts.ts')
@@ -724,6 +725,71 @@ describe('settings', () => {
     expect(note()).toContain("- Review: off. No review; the lines on reviewing below don't apply. (your setting for every machine)")
     s.set('brief.review', null)
     expect(s.sections([], [], null).find((x) => x.name === 'Agents')!.rows.map((r) => r.group)).toEqual(['Tasks', 'Tasks', 'Tasks', 'Coordinators', 'Coordinators', 'Coordinators', 'Backup', 'Backup', 'Backup'])
+  })
+
+  test('Settings → Web: no proxy until one is named, by its address, and an address links may use', () => {
+    const s = new Settings()
+    expect(s.web()).toEqual({ proxy: 'off', publicUrl: '' })
+    // one proxy or several, a network too, and off again
+    for (const v of ['127.0.0.1', '127.0.0.1, 10.8.0.0/24', '::1', 'off']) expect(s.set('web.proxy', v).ok).toBe(true)
+    expect(s.set('web.proxy', 'nginx').error).toBe('Write off, or a proxy address or network like 127.0.0.1 or 10.8.0.0/24, separated by commas.')
+    expect(s.set('web.proxy', '10.8.0.0/33').ok).toBe(false)
+    // an empty prefix length would silently mean "every IPv4 peer"
+    for (const bad of ['127.0.0.1/', '10.8.0.0/', '10.8.0.0/ 24', '/24']) expect(s.set('web.proxy', bad).ok).toBe(false)
+    expect(s.set('web.proxy', '10.8.0.9/24').ok).toBe(true)
+    s.set('web.proxy', '127.0.0.1')
+    expect(s.web().proxy).toBe('127.0.0.1')
+    // each machine has its own proxy; a space has none
+    expect(s.set('web.proxy', '10.0.0.1', 'machine').ok).toBe(true)
+    expect(s.set('web.proxy', '10.0.0.1', { space: 'web' }).ok).toBe(false)
+    expect(s.get('web.proxy')).toBe('10.0.0.1')
+    // the address links use: a web address, with a path if it has one; empty is the proxy's own host
+    expect(s.set('web.publicUrl', 'https://shep.example.com').ok).toBe(true)
+    expect(s.set('web.publicUrl', 'https://shep.example.com/shepherdr').ok).toBe(true)
+    for (const bad of ['shep.example.com', 'ftp://shep.example.com', 'https://user:pass@shep.example.com', 'https://shep.example.com/?x=1'])
+      expect(s.set('web.publicUrl', bad).ok).toBe(false)
+    expect(s.set('web.publicUrl', '', 'machine').ok).toBe(true)
+    expect(s.web()).toEqual({ proxy: '10.0.0.1', publicUrl: '' })
+    for (const k of ['web.proxy', 'web.publicUrl']) {
+      s.set(k, null)
+      s.set(k, null, 'machine')
+    }
+    expect(s.web()).toEqual({ proxy: 'off', publicUrl: '' })
+  })
+  test('forwarded headers count only when the connection comes from the named proxy, by its address', () => {
+    const req = (headers: Record<string, string>) => new Request('http://127.0.0.1:7787/api/snapshot', { headers })
+    const sent = { host: '127.0.0.1:7787', 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2' }
+    const cfg = { proxy: '127.0.0.1', publicUrl: '' }
+    expect(webShape(req(sent), '127.0.0.1', cfg)).toMatchObject({ proxied: true, host: 'shep.example.com', publicUrl: 'https://shep.example.com', forwardedFor: '10.8.0.2', secure: true })
+    // any other peer: its headers are not believed, and the request's own host counts
+    expect(webShape(req(sent), '10.8.0.7', cfg)).toMatchObject({ proxied: false, host: '127.0.0.1:7787', publicUrl: '', secure: false })
+    // nothing configured: a header alone never makes a caller the proxy
+    expect(webShape(req(sent), '127.0.0.1', { proxy: 'off', publicUrl: '' })).toMatchObject({ proxied: false, host: '127.0.0.1:7787', publicUrl: '' })
+    // no forwarded headers at all: the request's own host, as today
+    expect(webShape(req({ host: '127.0.0.1:7787' }), '127.0.0.1', cfg)).toMatchObject({ proxied: true, host: '127.0.0.1:7787', publicUrl: '' })
+    // networks, and an IPv4-mapped IPv6 peer
+    expect(isProxy('10.8.0.0/24', '10.8.0.9')).toBe(true)
+    expect(isProxy('10.8.0.0/24', '10.8.1.9')).toBe(false)
+    expect(isProxy('127.0.0.1', '::ffff:127.0.0.1')).toBe(true)
+    expect(isProxy('off', '127.0.0.1')).toBe(false)
+    expect(parseProxy('nonsense')).toBeUndefined()
+    // the explicit address wins over the proxy's host, and loses its trailing slash
+    expect(webShape(req(sent), '127.0.0.1', { proxy: '127.0.0.1', publicUrl: 'https://shep.example.com/' }).publicUrl).toBe('https://shep.example.com')
+  })
+  test("doctor's line: through what, asked for what, and whether the live link upgrades", () => {
+    const ago = () => '2m'
+    const none = { attempts: 0, upgraded: 0, refused: 0, lastRefusedAt: null }
+    const plain = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787' } }), '127.0.0.1', { proxy: 'off', publicUrl: '' })
+    expect(webLine({ proxy: 'off', publicUrl: '' }, plain, none, ago)).toBe('Web: no proxy configured, asked for 127.0.0.1:7787; the live link has not been tried yet.')
+    const cfg = { proxy: '127.0.0.1', publicUrl: '' }
+    const proxied = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787', 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2' } }), '127.0.0.1', cfg)
+    expect(webLine(cfg, proxied, { attempts: 13, upgraded: 12, refused: 1, lastRefusedAt: Date.now() }, ago, proxied.publicUrl)).toBe('Web: through the proxy 127.0.0.1, asked for shep.example.com from 10.8.0.2, and links use https://shep.example.com; the live link upgraded 12 times, 1 refused (last 2m ago).')
+    // the proxy is named, but the last request came round it
+    const direct = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787' } }), '10.8.0.7', cfg)
+    expect(webLine(cfg, direct, none, ago)).toBe('Web: the proxy 127.0.0.1 is configured, but the last request came from 10.8.0.7 directly; forwarded headers are ignored, the host asked for was 127.0.0.1:7787, and links stay relative to the page; the live link has not been tried yet.')
+    // through the proxy, but it forgets the host header
+    const bare = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787' } }), '127.0.0.1', cfg)
+    expect(webLine(cfg, bare, none, ago)).toBe('Web: through the proxy 127.0.0.1, but it sends no X-Forwarded-Host; the host asked for was 127.0.0.1:7787, and links stay relative to the page; the live link has not been tried yet.')
   })
 })
 

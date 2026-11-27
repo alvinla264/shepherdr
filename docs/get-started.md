@@ -23,6 +23,9 @@ herdr start; the action **Open Shepherdr** starts it too and shows its link. The
 prints the link, `https://<machine>.<tailnet>.ts.net/shepherdr/`. On an iPhone, open it in Safari and add it to the
 home screen: alerts need that.
 
+For a domain behind nginx and Authelia, reached over WireGuard, see [Behind nginx and Authelia](proxy.md): the server
+block, the login gate (WebSockets included), and the two Settings that make the app believe the proxy.
+
 ## Install it as an app, with alerts
 
 Install the link as an app on each device, open it, and turn alerts on in Settings → Alerts on → **Turn on for this

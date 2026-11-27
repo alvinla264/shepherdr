@@ -1,6 +1,7 @@
 // A source fills the view model and carries out actions. The live source reads herdr and the CLIs' logs; the demo
 // source holds the prototype's fictional world, for side-by-side review and tests.
 import type { Action, ActivityAnswer, ActivityAsk, AddSpace, Alert, Chat, Folders, Snapshot, TermScreen, WorktreeAsk } from '../shared/types.ts'
+import type { WebConfig } from './web.ts'
 
 export type SourceEvents = {
   snapshot: []
@@ -48,6 +49,8 @@ export interface Source extends Emitter<SourceEvents> {
   upload(chat: string, name: string, data: Uint8Array): Promise<string>
   /** a file attached in a chat, by the path its chat line gives; only those, never anything else on the machine */
   attachment(chat: string, path: string): Promise<Blob | null>
+  /** which proxy's forwarded headers are believed here, and the address links use (Settings → Web) */
+  web?(): WebConfig
   /** a machine's folders, for adding a project: only folders in the human's home on it */
   folders?(machine: string, path: string): Promise<Folders>
   /** add a project from the sidebar, as `shepherdr project add` does (made a new repo first with create); its place */

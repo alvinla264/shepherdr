@@ -2347,3 +2347,24 @@ describe('choosing the branch tasks start from and merge into', () => {
     await until(() => !!t.trouble)
   })
 })
+
+describe("shepherdr doctor's web line", () => {
+  test('says the proxy, the host it was asked for, and whether the live link upgrades', async () => {
+    const { startApp } = await import('../server/app.ts')
+    const { web } = await import('../server/web.ts')
+    expect(src.settings.set('web.proxy', '127.0.0.1').ok).toBe(true)
+    src.settings.set('web.publicUrl', null)
+    // the last request, not what this file's other tests left
+    web.reset()
+    const app = startApp({ source: src, dist: '/nonexistent', port: 0 })
+    try {
+      await fetch(`http://127.0.0.1:${app.port}/api/snapshot`, { headers: { 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2', 'sec-fetch-mode': 'cors' } })
+      const line = (await src.cli(['doctor'], {})).out.split('\n').find((l) => l.startsWith('Web: '))
+      expect(line).toBe('Web: through the proxy 127.0.0.1, asked for shep.example.com from 10.8.0.2, and links use https://shep.example.com; the live link has not been tried yet.')
+    } finally {
+      app.stop(true)
+      src.settings.set('web.proxy', null)
+      web.reset()
+    }
+  })
+})
