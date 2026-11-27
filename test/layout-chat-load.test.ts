@@ -98,6 +98,44 @@ describe.skipIf(!browser)('a chat with hundreds of messages', () => {
     await page.close()
   }, 60_000)
 
+  test('a chat that keeps growing while you read further up draws no more rows than one that just opened (phone)', async () => {
+    const key = 'p:vm-str:~'
+    const base = Date.UTC(2026, 4, 1, 12, 23)
+    world.chats[key].messages = Array.from({ length: 400 }, (_, i): Message => ({
+      id: `grow-${i}`,
+      who: i % 2 ? 'agent' : 'you',
+      at: base + i * 60_000,
+      text: i % 2 ? `A reply with **bold**, number ${i}.` : `Question number ${i}`,
+    }))
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    await page.goto(url())
+    await page.locator('[data-msg="grow-399"]').waitFor({ timeout: 30_000 })
+    await page.waitForTimeout(300)
+    // read a little above the newest: the window reaches the chat's end
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-messages]')!.closest('.overflow-y-auto') as HTMLElement
+      el.scrollTop = el.scrollHeight - el.clientHeight - 200
+    })
+    await page.waitForTimeout(300)
+    const at = (await scroll(page)).top
+    // the agent keeps working: 400 replies come in while the chat stays where it is read
+    const emit = (world as unknown as { emit(e: string, k: string): void }).emit.bind(world)
+    for (let batch = 0; batch < 40; batch++) {
+      for (let i = 0; i < 10; i++) {
+        const n = batch * 10 + i
+        world.chats[key].messages.push({ id: `grow-news-${n}`, who: 'agent', text: `Pass ${n} is merged.`, at: Date.now() + n })
+      }
+      emit('chat', key)
+      await page.waitForTimeout(60)
+    }
+    await page.waitForTimeout(400)
+    // what is drawn stays what a chat opens with, the count of new replies is still right, and the reader did not move
+    expect(await drawn(page)).toBeLessThanOrEqual(120)
+    expect((await scroll(page)).top).toBe(at)
+    expect(await page.getByRole('button', { name: /400 new replies/ }).count()).toBe(1)
+    await page.close()
+  }, 60_000)
+
   test('a pick made on a question card is still picked when the window draws the card again (phone)', async () => {
     const key = 'p:vm-str:~'
     const base = Date.UTC(2026, 4, 1, 12, 23)

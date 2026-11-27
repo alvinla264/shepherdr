@@ -1487,12 +1487,24 @@ export function QuestionCard({ q, chat, msg, from, space, source }: { q: Questio
 
 /* ---------- a secret an agent asked for ---------- */
 
+/** a secret typed into a card and not saved yet, and where it goes, kept in memory only (never a draft, never storage)
+    while the screen is: a long chat draws only the rows near what shows, so the card can be drawn again */
+const unsaved = new Map<string, { value: string; level: string }>()
+
 /** a masked box for a secret an agent asked for by name, and where it is kept (its space, its machine, Everywhere).
  *  The value goes once to the main machine and is never kept here, as a draft or otherwise; the agent is told it is
  *  there, by name only */
 function SecretCard({ ask, chat }: { ask: SecretAsk; chat: Chat }) {
-  const [value, setValue] = useState('')
-  const [level, setLevel] = useState(ask.levels[0]?.id ?? 'all')
+  const card = `${chat.key}:${ask.id}`
+  const kept = unsaved.get(card)
+  const [value, setValue] = useState(() => kept?.value ?? '')
+  const [level, setLevel] = useState(() => kept?.level ?? ask.levels[0]?.id ?? 'all')
+  /** what is typed stays for the screen (a card drawn away and back keeps it), and goes once it is saved */
+  const keep = (v: string, l = level) => {
+    if (v) unsaved.set(card, { value: v, level: l })
+    else unsaved.delete(card)
+    setValue(v)
+  }
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const save = async () => {
@@ -1502,7 +1514,10 @@ function SecretCard({ ask, chat }: { ask: SecretAsk; chat: Chat }) {
     try {
       const r = (await act({ type: 'secret', level, name: ask.name, value, card: { chat: chat.key, id: ask.id } })) as { ok?: boolean; error?: string }
       if (r?.ok === false) setErr(r.error ?? "That didn't go through.")
-      else setValue('')
+      else {
+        unsaved.delete(card)
+        setValue('')
+      }
     } catch {
       setErr("That didn't go through: Shepherdr can't be reached.")
     } finally {
@@ -1519,13 +1534,20 @@ function SecretCard({ ask, chat }: { ask: SecretAsk; chat: Chat }) {
         </Sent>
       ) : (
         <>
-          <SecretField label={ask.name} value={value} onChange={setValue} onEnter={save} />
+          <SecretField label={ask.name} value={value} onChange={keep} onEnter={save} />
           {ask.levels.length > 1 ? (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
               <span className="text-[0.75rem] text-fg2 phone:text-[0.8125rem]">For</span>
               <Tabs label="Where it is kept">
                 {ask.levels.map((l) => (
-                  <Tab key={l.id} on={l.id === level} onClick={() => setLevel(l.id)}>
+                  <Tab
+                    key={l.id}
+                    on={l.id === level}
+                    onClick={() => {
+                      keep(value, l.id)
+                      setLevel(l.id)
+                    }}
+                  >
                     {l.label}
                   </Tab>
                 ))}

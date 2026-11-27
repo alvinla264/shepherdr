@@ -40,8 +40,9 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
   // the newest message and what is just above it, or the rows around where the chat was scrolled to
   const atTail = !free || free.end > rows.length || free.start >= rows.length
   // a window that reached the end of the chat when it was read follows it as replies come in (the New line is one of
-  // them): nothing scrolls to draw them otherwise
-  const drawn = atTail ? { start: Math.max(0, rows.length - AT_TAIL), end: rows.length } : { start: free.start, end: free.toEnd ? rows.length : Math.min(free.end, rows.length) }
+  // them): nothing scrolls to draw them otherwise. It keeps its size doing so, so a chat that runs on for hours while you
+  // read an earlier reply still draws no more rows than one that just opened
+  const drawn = atTail ? { start: Math.max(0, rows.length - AT_TAIL), end: rows.length } : { start: free.start, end: follow(free, rows.length) }
   const keys = rows.map((r) => r.key)
   // what the listeners read: this render's rows, and where they are drawn
   const now = useRef({ rows, keys, drawn, atTail })
@@ -164,6 +165,13 @@ export function Window({ chat, list, rows, draw, tail }: { chat: string; list: R
   out.push(<div key="window-bottom" data-window-bottom ref={bottom} aria-hidden="true" className="shrink-0" />)
   if (tail) out.push(<Fragment key="window-tail">{tail}</Fragment>)
   return <>{out}</>
+}
+
+/** where a window read from the scroll position ends, once the chat has grown at its end: a window that reached the end
+    follows it, up to the rows a chat opens with, so what is drawn stays bounded however long the chat runs */
+function follow(free: { start: number; end: number; toEnd: boolean }, rows: number) {
+  if (!free.toEnd) return Math.min(free.end, rows)
+  return Math.min(rows, Math.max(free.end, free.start + AT_TAIL))
 }
 
 /** a spacer's height: none at all when nothing is missing there, so its own gap goes too */
