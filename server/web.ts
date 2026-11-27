@@ -41,6 +41,8 @@ export function parseProxy(value: string): ProxyRule[] | undefined {
   for (const part of v.split(/[\s,]+/).filter(Boolean)) {
     const [addr, bits, ...rest] = part.split('/')
     if (rest.length || !addr) return undefined
+    // "127.0.0.1/" is not a whole address: Number('') is 0, which would trust every IPv4 peer
+    if (bits !== undefined && !/^\d{1,2}$/.test(bits)) return undefined
     const a4 = ipv4(addr)
     if (a4 !== null) {
       const n = bits === undefined ? 32 : Number(bits)
@@ -163,17 +165,21 @@ export const web = {
   /** a live-link upgrade was tried, and whether the server could take it */
   upgrade(ok: boolean) {
     state.attempts++
-    if (ok) state.upgraded++
-    else {
-      state.refused++
-      state.lastRefusedAt = Date.now()
+    if (ok) {
+      state.upgraded++
+      return
     }
+    state.refused++
+    state.lastRefusedAt = Date.now()
   },
   /**
    * A browser that reached the page but never opened the live link: the proxy refused the upgrade before it got here,
    * so the server could not count it itself. The browser reports it, and doctor can say so.
    */
   refusedByProxy() {
+    // the server may have seen the same refusal (a 403 from the same-origin guard): one report per few seconds is
+    // enough for doctor, and a report cannot inflate the count
+    if (state.lastRefusedAt && Date.now() - state.lastRefusedAt < 10_000) return
     state.attempts++
     state.refused++
     state.lastRefusedAt = Date.now()
@@ -200,8 +206,11 @@ export const web = {
   },
 }
 
-/** doctor's one line about the web shape: through what, asked for what, and whether the live link upgrades */
-export function webLine(cfg: WebConfig, last: WebShape | null, links: LinkCounts, ago: (at: number) => string): string {
+/**
+ * doctor's one line about the web shape: through what, asked for what, whether the live link upgrades, and the address
+ * links really use (`base`: what web.base() would give, which outlives a request that carried no host)
+ */
+export function webLine(cfg: WebConfig, last: WebShape | null, links: LinkCounts, ago: (at: number) => string, base = ''): string {
   const live =
     links.attempts === 0
       ? 'the live link has not been tried yet'
@@ -215,7 +224,7 @@ export function webLine(cfg: WebConfig, last: WebShape | null, links: LinkCounts
   }
   const proxy = cfg.proxy.trim()
   if (!last) return `Web: the proxy ${proxy} is configured, and no request has come yet; ${live}.`
-  const address = cfg.publicUrl.trim() ? `links use ${cleanBase(cfg.publicUrl)} (web.publicUrl)` : last.publicUrl ? `links use ${last.publicUrl}` : 'links stay relative to the page'
+  const address = cleanBase(cfg.publicUrl) ? `links use ${cleanBase(cfg.publicUrl)} (web.publicUrl)` : base ? `links use ${base}` : 'links stay relative to the page'
   if (!last.proxied) {
     return `Web: the proxy ${proxy} is configured, but the last request came from ${last.peer ?? 'an unknown address'} directly; forwarded headers are ignored, the host asked for was ${last.host || 'none'}, and ${address}; ${live}.`
   }

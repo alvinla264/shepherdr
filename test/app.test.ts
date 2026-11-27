@@ -395,9 +395,20 @@ describe('behind a trusted proxy', () => {
     while (!got.some((m) => m.type === 'snapshot')) await new Promise((r) => setTimeout(r, 10))
     expect(web.links).toMatchObject({ attempts: before.attempts + 2, upgraded: before.upgraded + 1, refused: before.refused + 1 })
     ws.close()
-    // a browser whose proxy refuses the upgrade before it reaches here reports it, so doctor is not blind to it
-    await fetch(`${base}/api/live-failed`, { method: 'POST', headers: { 'x-shepherdr': '1', origin: base } })
-    expect(web.links.refused).toBe(before.refused + 2)
+    // a handshake the same-origin guard turns away is a refusal too, not an untried live link
+    const guard = await fetch(`${base}/api/ws`, { headers: { origin: 'https://evil.example', upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13' } })
+    expect(guard.status).toBe(403)
+    expect(web.links).toMatchObject({ attempts: before.attempts + 3, upgraded: before.upgraded + 1, refused: before.refused + 2 })
+  })
+  test('a page reports a refusal the proxy made before the app saw it, and retries cannot inflate it', async () => {
+    configurable.web = () => ({ proxy: 'off', publicUrl: '' })
+    web.reset()
+    // the report comes from the page at the address the browser used, which is not the Host the app sees behind a proxy
+    const report = () => fetch(`${base}/api/live-failed`, { method: 'POST', headers: { origin: 'https://shep.example.com', 'x-shepherdr': '1' } })
+    expect((await report()).status).toBe(200)
+    expect(web.links).toMatchObject({ attempts: 1, upgraded: 0, refused: 1 })
+    expect((await report()).status).toBe(200)
+    expect(web.links.attempts).toBe(1)
   })
   test('a program on this machine does not erase what the browser taught doctor', async () => {
     configurable.web = () => ({ proxy: '127.0.0.1', publicUrl: '' })

@@ -66,12 +66,13 @@ server {
   client_max_body_size 64m;
 
   location / {
-    auth_request /authelia/api/verify;
-    auth_request_set $user $upstream_http_remote_user;
+    auth_request /authelia/authz;
+    auth_request_set $redirection_url $upstream_http_location;
+    error_page 401 =302 $redirection_url;
     proxy_pass http://127.0.0.1:7787;
   }
 
-  # the login gate itself, reachable without a session
+  # the login portal itself, reachable without a session (the authz subrequest is internal)
   location /authelia/ {
     proxy_pass http://127.0.0.1:9091/;
   }
@@ -94,27 +95,47 @@ The `location /` above already carries `auth_request` and the upgrade headers fo
 
 ### Authelia
 
-Authelia v4 verifies with a forwarded-auth request. Add the verify endpoint to the same server block (or a `server`
-shared by all your apps):
+Authelia v4's current guide uses the `AuthRequest` authz endpoint, which answers `401` with a `Location` header when
+there is no session; nginx turns that into the login redirect. (Older Authelia, before the authz endpoints, used
+`/api/verify`; if yours does, keep that path and let it be the same subrequest.)
+
+Add the internal authz endpoint to the server block (or a `server` shared by all your apps):
 
 ```nginx
-location = /authelia/api/verify {
+location = /authelia/authz {
   internal;
-  proxy_pass http://127.0.0.1:9091/api/verify?rd=https://auth.example.com/;
-  proxy_set_header X-Original-URL      $scheme://$http_host$request_uri;
-  proxy_set_header X-Original-Method   $request_method;
-  proxy_set_header X-Forwarded-Proto   $scheme;
-  proxy_set_header X-Forwarded-Host    $http_host;
-  proxy_set_header X-Forwarded-For     $remote_addr;
-  proxy_set_header Content-Length      "";
+  proxy_pass http://127.0.0.1:9091/api/authz/auth-request;
+  proxy_set_header X-Original-Method $request_method;
+  proxy_set_header X-Original-URL    $scheme://$host$request_uri;
+  proxy_set_header X-Forwarded-For   $remote_addr;
+  proxy_set_header Content-Length    "";
+  proxy_set_header Connection        "";
   proxy_pass_request_body off;
 }
 ```
 
-In Authelia's `configuration.yml`, list the domain and the policy you want — this gate is your only login, so make it
-multi-factor:
+and wire it into the app's location, so the gate and the redirect agree:
+
+```nginx
+location / {
+  auth_request /authelia/authz;
+  auth_request_set $redirection_url $upstream_http_location;
+  # 401 is what auth_request accepts; the redirect goes to the page, never into auth_request (a 302 there is a 500)
+  error_page 401 =302 $redirection_url;
+
+  proxy_pass http://127.0.0.1:7787;
+}
+```
+
+In Authelia's `configuration.yml`, give it the portal's address (the `Location` header comes from it) and the policy
+you want — this gate is your only login, so make it multi-factor:
 
 ```yaml
+session:
+  cookies:
+    - domain: example.com
+      authelia_url: 'https://auth.example.com'
+
 access_control:
   default_policy: deny
   rules:
@@ -122,9 +143,9 @@ access_control:
       policy: two_factor
 ```
 
-No session is `401`. Safari and Chrome will follow a `302` to the login page for a page load, but not for the
-WebSocket handshake or an XHR, so sign in in that browser before opening the app: the cookie then rides along on the
-page, its API calls, the WebSocket and the service worker.
+Sign in before opening the app. A page load follows the redirect, but a WebSocket handshake or an XHR does not, so with
+no session the app cannot show its sign-in state: the browser gets the redirect as a failed socket instead. Once signed
+in, the cookie rides along on the page, its API calls, the WebSocket and the service worker.
 
 ## Caddy
 
@@ -149,7 +170,7 @@ shep.example.com {
 
   handle {
     forward_auth 127.0.0.1:9091 {
-      uri /api/verify?rd=https://auth.example.com/
+      uri /api/authz/forward-auth?authelia_url=https://auth.example.com/
       copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
     }
     reverse_proxy 127.0.0.1:7787 {
@@ -192,7 +213,9 @@ strips the prefix before `/api/`. nginx only has to pass the path through as it 
 
 ```nginx
 location /shepherdr/ {
-  auth_request /authelia/api/verify;
+  auth_request /authelia/authz;
+  auth_request_set $redirection_url $upstream_http_location;
+  error_page 401 =302 $redirection_url;
   proxy_pass http://127.0.0.1:7787;   # no trailing slash on either side: the prefix stays
 }
 ```

@@ -765,8 +765,15 @@ function forget() {
 /** say the link is gone in a few seconds, unless it is back by then; a timer that slept with the page starts over */
 function sayLater(at = Date.now()): ReturnType<typeof setTimeout> {
   return setTimeout(() => {
-    if (Date.now() - at > SAY_LOST_AFTER + 1000) saying = sayLater()
-    else void sayDown()
+    if (Date.now() - at > SAY_LOST_AFTER + 1000) {
+      saying = sayLater()
+      return
+    }
+    // keep looking while the socket stays down: a probe that failed once must not hide a proxy problem that starts
+    // (or ends) later
+    void sayDown().finally(() => {
+      saying = ws?.readyState === WebSocket.OPEN ? null : sayLater()
+    })
   }, SAY_LOST_AFTER)
 }
 

@@ -121,8 +121,20 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
       const browser = ['origin', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-site'].some((h) => req.headers.has(h))
       web.see(shape, cfg, browser)
 
+      // A page whose HTTP answers but whose socket cannot open reports it (the proxy refused the upgrade before it got
+      // here). It only raises a counter, changes nothing else, and is throttled, so it is accepted before the guard:
+      // the very mismatch the report is about is one the guard would refuse.
+      if (path === '/api/live-failed' && req.method === 'POST') {
+        web.refusedByProxy()
+        return json({ ok: true })
+      }
+
       // only this app's own pages may act: another website in your browser can't (no cross-site requests)
-      if (path.startsWith('/api/') && path !== '/api/font/InterVariable.woff2' && !sameSite(req, path, shape.host)) return new Response('forbidden', { status: 403 })
+      if (path.startsWith('/api/') && path !== '/api/font/InterVariable.woff2' && !sameSite(req, path, shape.host)) {
+        // a live link the same-origin check turns away is a refused upgrade too, not an untried one
+        if (path === '/api/ws') web.upgrade(false)
+        return new Response('forbidden', { status: 403 })
+      }
 
       if (path === '/api/ws') {
         // counted, so a proxy that refuses to upgrade says so in shepherdr doctor instead of looking like a frozen screen
@@ -144,12 +156,6 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
         if (path === '/api/snapshot') return json(source.snapshot())
         // which Shepherdr answers: a start from another plugin folder or version stops it (scripts/plugin.ts)
         if (path === '/api/version') return json(running())
-        // the page answers but the live link cannot open: the proxy is refusing the upgrade before it reaches here, so
-        // the browser says so and doctor can report it (a request the proxy never let through is never counted)
-        if (path === '/api/live-failed' && req.method === 'POST') {
-          web.refusedByProxy()
-          return json({ ok: true })
-        }
         // the updater restarts the server only once it has stopped new calls and none is on; both at once, so no call
         // can start in between. It lifts the stop again while it waits for a call to end.
         if (path === '/api/drain' && req.method === 'POST') {

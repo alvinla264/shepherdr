@@ -734,6 +734,8 @@ describe('settings', () => {
     for (const v of ['127.0.0.1', '127.0.0.1, 10.8.0.0/24', '::1', 'off']) expect(s.set('web.proxy', v).ok).toBe(true)
     expect(s.set('web.proxy', 'nginx').error).toBe('Write off, or a proxy address or network like 127.0.0.1 or 10.8.0.0/24, separated by commas.')
     expect(s.set('web.proxy', '10.8.0.0/33').ok).toBe(false)
+    // an empty prefix length would silently mean "every IPv4 peer"
+    for (const bad of ['127.0.0.1/', '10.8.0.0/', '10.8.0.0/ 24', '/24']) expect(s.set('web.proxy', bad).ok).toBe(false)
     expect(s.set('web.proxy', '10.8.0.9/24').ok).toBe(true)
     s.set('web.proxy', '127.0.0.1')
     expect(s.web().proxy).toBe('127.0.0.1')
@@ -778,7 +780,7 @@ describe('settings', () => {
     expect(webLine({ proxy: 'off', publicUrl: '' }, plain, none, ago)).toBe('Web: no proxy configured, asked for 127.0.0.1:7787; the live link has not been tried yet.')
     const cfg = { proxy: '127.0.0.1', publicUrl: '' }
     const proxied = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787', 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2' } }), '127.0.0.1', cfg)
-    expect(webLine(cfg, proxied, { attempts: 13, upgraded: 12, refused: 1, lastRefusedAt: Date.now() }, ago)).toBe('Web: through the proxy 127.0.0.1, asked for shep.example.com from 10.8.0.2, and links use https://shep.example.com; the live link upgraded 12 times, 1 refused (last 2m ago).')
+    expect(webLine(cfg, proxied, { attempts: 13, upgraded: 12, refused: 1, lastRefusedAt: Date.now() }, ago, proxied.publicUrl)).toBe('Web: through the proxy 127.0.0.1, asked for shep.example.com from 10.8.0.2, and links use https://shep.example.com; the live link upgraded 12 times, 1 refused (last 2m ago).')
     // the proxy is named, but the last request came round it
     const direct = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787' } }), '10.8.0.7', cfg)
     expect(webLine(cfg, direct, none, ago)).toBe('Web: the proxy 127.0.0.1 is configured, but the last request came from 10.8.0.7 directly; forwarded headers are ignored, the host asked for was 127.0.0.1:7787, and links stay relative to the page; the live link has not been tried yet.')
