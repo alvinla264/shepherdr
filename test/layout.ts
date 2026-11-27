@@ -1,7 +1,7 @@
 // The chat as a phone draws it, shared by the layout-*.test.ts files: the demo world with a few extra messages, served
 // from the screen built once (web.ts) and opened in a real browser. One of each per file, so the files run in
 // parallel; skipped where no browser is installed.
-import { afterAll } from 'bun:test'
+import { afterAll, expect } from 'bun:test'
 import type { Browser, Locator, Page } from 'playwright-core'
 import { startApp } from '../server/app.ts'
 import { DemoWorld } from '../server/demo/world.ts'
@@ -26,6 +26,23 @@ export async function until<T>(read: () => Promise<T>, ok: (v: T) => boolean, ms
   }
   return v
 }
+/** a column's width on the screen, in pixels as drawn */
+export const widthOf = (page: Page, sel: string) => page.$eval(sel, (el) => el.getBoundingClientRect().width)
+/** a column's slot in the frame, in pixels as drawn: places keeps its own width inside while it slides shut, so its slot
+ *  is what says whether it shows */
+export const slotOf = (page: Page, sel: string) => page.$eval(sel, (el) => el.parentElement!.getBoundingClientRect().width)
+/** Waits for a width to be the one the test expects, then checks it. The frame slides its columns to a sidebar's new
+ *  width in 200 ms after a drag, a key or a double-click, and on a loaded runner that slide starts late: a clock reads
+ *  the width on its way (507 of 516 px). A width that never comes fails here, saying which column and what it saw. */
+async function widthBecomes(what: string, read: () => Promise<number>, want: number, ms: number) {
+  // a hundredth of a pixel: a slide caught at 0.25 px is not the 0 px of a column out of the layout
+  const got = await until(read, (w) => Math.abs(w - want) < 0.01, ms)
+  expect(`${what}: ${+got.toFixed(2)}px`).toBe(`${what}: ${want}px`)
+}
+/** a column's width, once the screen has caught up with it */
+export const widthIs = (page: Page, sel: string, want: number, ms = 5000) => widthBecomes(sel, () => widthOf(page, sel), want, ms)
+/** a column's slot in the frame, once the screen has caught up with it */
+export const slotIs = (page: Page, sel: string, want: number, ms = 5000) => widthBecomes(`${sel}'s slot`, () => slotOf(page, sel), want, ms)
 /** it stops moving before a click: a frame in the chat takes its page's height a moment after it loads, moving all
  *  above it, after the two still frames a click waits for. So it is scrolled to first (lazy frames near it start
  *  loading), every frame on screen has loaded its own page (not the blank one a lazy frame starts with), and then its
