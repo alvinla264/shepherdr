@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Page } from 'playwright-core'
 import { Browsers, browserEnv } from '../server/live/browser.ts'
+import { shot } from './chromium.ts'
 import { fakeAgentBrowser } from './fake-agent-browser.ts'
 import { layout, settled, until } from './layout.ts'
 
@@ -439,7 +440,7 @@ describe.skipIf(!browser)("a task's side panel", () => {
       // a frame of the page: any picture will do
       const paint = await browser!.newPage({ viewport: { width: 640, height: 360 } })
       await paint.setContent('<body style="margin:0;background:#2563eb"><h1 style="color:white;margin:40px">Settings</h1></body>')
-      const jpeg = (await paint.screenshot({ type: 'jpeg' })).toString('base64')
+      const jpeg = (await shot(paint)).toString('base64')
       await paint.close()
       const page = await browser!.newPage({ viewport: { width: 1600, height: 900 } })
       await page.goto(task('GTM-15'))
@@ -447,7 +448,8 @@ describe.skipIf(!browser)("a task's side panel", () => {
       await page.getByRole('tab', { name: 'Browser' }).click()
       await until(() => fake.streamSocks.size > 0)
       fake.toPanels({ type: 'frame', seq: 1, data: jpeg, metadata: { deviceWidth: 1280, deviceHeight: 720, scrollOffsetX: 0, scrollOffsetY: 0 } })
-      await page.getByText('Agent is driving').waitFor()
+      // a wait that says which one it was, rather than the whole test dying at its 30 s
+      await page.getByText('Agent is driving').waitFor({ timeout: 15_000 })
       const stage = page.getByRole('application')
       // the agent drives: a click goes nowhere
       await stage.click()
@@ -495,7 +497,7 @@ describe.skipIf(!browser)("a task's side panel", () => {
       // a white page, as most are
       const paint = await browser!.newPage({ viewport: { width: 640, height: 360 } })
       await paint.setContent('<body style="background:#fff"></body>')
-      const white = (await paint.screenshot({ type: 'jpeg' })).toString('base64')
+      const white = (await shot(paint)).toString('base64')
       await paint.close()
       const frame = () => fake.toPanels({ type: 'frame', seq: 1, data: white, metadata: { deviceWidth: 1280, deviceHeight: 720, scrollOffsetX: 0, scrollOffsetY: 0 } })
       const page = await browser!.newPage({ viewport: { width: 1600, height: 900 }, colorScheme: 'dark' })
@@ -508,7 +510,7 @@ describe.skipIf(!browser)("a task's side panel", () => {
       await page.getByRole('tab', { name: 'Browser' }).click()
       await until(() => fake.streamSocks.size > 0)
       frame()
-      await page.getByText('Agent is driving').waitFor()
+      await page.getByText('Agent is driving').waitFor({ timeout: 15_000 })
       // another agent-browser takes the session's daemon: the stream goes, and starting again fails
       fake.state({ clash: 99 })
       fake.streamSocks.forEach((s) => s.close())

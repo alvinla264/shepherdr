@@ -1,6 +1,6 @@
 // The shared browser: the server's relay between a task's agent-browser session and the Browser panel (on a stand-in
 // for agent-browser, its stream and its DevTools), the notes Annotate mode sends, and the panel's arithmetic.
-import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,21 +14,48 @@ const { toUrl, shortUrl } = await import('../shared/browser.ts')
 const { fit, keyEvent, pinAt, shotRect, toPage } = await import('../plugins/browser/input.ts')
 import { launch } from './chromium.ts'
 import { fakeAgentBrowser } from './fake-agent-browser.ts'
+import { GATE_MS, gate, launcher } from './gate.ts'
 import type { BrowserDown, BrowserPick } from '../shared/browser.ts'
 
 const fake = fakeAgentBrowser()
-const { streamSocks, fromPanel, toPanels, cdpCalls, state, calls, dir } = fake
+const { streamSocks, handshakes, fromPanel, toPanels, cdpCalls, state, calls, dir } = fake
 const FAKE = fake.bin
 afterAll(() => fake.stop())
 
+/** a WebSocket that opens (the handshake the tests need), or does not within a second */
+const opens = (url: string) =>
+  new Promise<boolean>((res) => {
+    const ws = new WebSocket(url)
+    const t = setTimeout(() => (ws.close(), res(false)), 1000)
+    ws.onopen = () => (clearTimeout(t), ws.close(), res(true))
+    ws.onerror = () => (clearTimeout(t), res(false))
+  })
+
+// The fixture, once, with room to be slow on a loaded runner: the stand-in launching at all, its stream answering a
+// WebSocket handshake, and its DevTools server listening. A failure says which port never answered (or what the
+// launcher said), once, instead of every test dying on its own 5 s ceiling. The hook gets its own timeout, longer than
+// the gate's: scripts/test.ts runs the tests with --timeout=20000.
+beforeAll(async () => {
+  await launcher([FAKE, '--version'], (out) => /agent-browser/i.test(out))
+  await gate(`the stand-in agent-browser’s stream on :${fake.stream.port} to answer a WebSocket handshake`, () => opens(`ws://127.0.0.1:${fake.stream.port}/`))
+  await gate(`the stand-in agent-browser’s DevTools server on :${fake.cdp.port}`, () =>
+    fetch(`http://127.0.0.1:${fake.cdp.port}/`, { signal: AbortSignal.timeout(1000) }).then((r) => r.ok, () => false),
+  )
+}, GATE_MS * 2 + 10_000)
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
-async function until(f: () => boolean, ms = 5000) {
+/** wait for the actual condition, short: `what` says which one, and where it was asked when it has no words of its own */
+async function until(f: () => boolean, what?: string, ms = 5000) {
+  const asked = what ?? new Error().stack?.split('\n').slice(1).find((l) => !/\bat until\b/.test(l))?.trim() ?? 'the test'
   const t = Date.now()
   while (!f()) {
-    if (Date.now() - t > ms) throw new Error('timed out')
+    if (Date.now() - t > ms) throw new Error(`Waited ${ms} ms for ${asked}`)
     await wait(20)
   }
 }
+
+/** panels a test opened: ended after it, whoever failed, so a failed assertion cannot leave its stream behind */
+const panels: { end: () => void }[] = []
 
 function setup(o: { working?: boolean; bin?: string; idleClose?: (task: string) => number | null } = {}) {
   const told: string[] = []
@@ -36,22 +63,44 @@ function setup(o: { working?: boolean; bin?: string; idleClose?: (task: string) 
   const got: BrowserDown[] = []
   const raw: string[] = []
   let closed = false
-  const panel = (task = 'SHE-9') =>
-    b.attach(task, {
+  const panel = (task = 'SHE-9') => {
+    const bridge = b.attach(task, {
       send: (s) => {
         raw.push(s)
         got.push(JSON.parse(s))
       },
       close: () => (closed = true),
     })
+    panels.push(bridge)
+    return bridge
+  }
   const last = <T extends BrowserDown['type']>(t: T) => got.filter((m) => m.type === t).pop() as Extract<BrowserDown, { type: T }> | undefined
   return { b, told, got, raw, panel, last, closed: () => closed }
 }
 
 beforeEach(async () => {
-  // the last test's stream link is gone first
-  await until(() => streamSocks.size === 0)
+  // the last test's stream link is gone first (afterEach below closed it; this says so if it could not)
+  await until(() => streamSocks.size === 0, 'the last test’s browser stream to close')
   fake.reset()
+})
+
+// A test that threw before its own close leaves its panel and its stream link behind: end them here, and close what the
+// stand-in still holds, so the next test starts from nothing. A leak used to fail every test after it at exactly 5 s —
+// one failure turned into twenty. Closing a line to the stand-in is local, so this gets a moment, not the gate's window
+// (a hook that sat past bun's own 5 s ceiling would be the timeout, without this message).
+afterEach(async () => {
+  for (const p of panels.splice(0)) p.end()
+  // closing a line to the stand-in is local, so it gets a moment, not the gate's window (a hook that sat past bun's
+  // own 5 s ceiling would be the timeout, without this message). A connection still on its way in counts too: the
+  // stand-in watches it from the request, so this waits for the handshake rather than sleeping past it.
+  await until(
+    () => {
+      for (const s of [...streamSocks]) s.close()
+      return streamSocks.size === 0 && handshakes.size === 0
+    },
+    'the test’s browser stream to close',
+    4000,
+  )
 })
 
 describe('a task’s browser', () => {
@@ -63,13 +112,13 @@ describe('a task’s browser', () => {
   test('opening the panel starts the browser on demand and relays its stream; the port itself never reaches the screen', async () => {
     const { panel, got, raw, last, b } = setup()
     panel()
-    await until(() => streamSocks.size === 1)
+    await until(() => streamSocks.size === 1, 'the panel’s stream to the stand-in')
     const run = calls().map((c) => c.args.join(' '))
     expect(run).toEqual(['stream status', 'open about:blank', 'stream status'])
     expect(calls().every((c) => c.session === 'SHE-9' && c.namespace === 'shepherdr')).toBe(true)
     toPanels({ type: 'frame', seq: 1, data: 'AAAA', metadata: { deviceWidth: 1280, deviceHeight: 720, scrollOffsetY: 0 } })
-    await until(() => got.some((m) => m.type === 'frame'))
-    await until(() => last('state')?.url === 'http://localhost:5173/settings')
+    await until(() => got.some((m) => m.type === 'frame'), 'a frame relayed to the panel')
+    await until(() => last('state')?.url === 'http://localhost:5173/settings', 'the page the stand-in reports')
     expect(last('state')).toMatchObject({ driver: 'agent', connected: true, title: 'Settings', viewport: { w: 1280, h: 720 } })
     expect(raw.join('\n')).not.toContain(String(fake.stream.port))
     await b.close('SHE-9')
@@ -79,7 +128,7 @@ describe('a task’s browser', () => {
     state({ connected: true, sessions: ['SHE-9'] })
     const { panel, b } = setup()
     panel()
-    await until(() => streamSocks.size === 1)
+    await until(() => streamSocks.size === 1, 'the panel’s stream to the stand-in')
     expect(calls().map((c) => c.args.join(' '))).toEqual(['stream status'])
     await b.close('SHE-9')
   })
@@ -87,20 +136,20 @@ describe('a task’s browser', () => {
   test('your input goes in only while you drive; taking over tells a working agent to hold off, handing back tells it to go on', async () => {
     const { panel, told, last, b } = setup({ working: true })
     const p = panel()
-    await until(() => streamSocks.size === 1)
+    await until(() => streamSocks.size === 1, 'the panel’s stream to the stand-in')
     p.message(JSON.stringify({ type: 'input_mouse', eventType: 'mousePressed', x: 5, y: 5, button: 'left', clickCount: 1 }))
     await wait(50)
     expect(fromPanel).toEqual([])
     p.message(JSON.stringify({ type: 'take' }))
-    await until(() => last('state')?.driver === 'you')
+    await until(() => last('state')?.driver === 'you', 'you to be driving')
     expect(told).toHaveLength(1)
     expect(told[0]).toContain('Elias took over the shared browser')
     expect(told[0]).not.toContain('[')
     p.message(JSON.stringify({ type: 'input_mouse', eventType: 'mousePressed', x: 5, y: 5, button: 'left', clickCount: 1 }))
-    await until(() => fromPanel.length === 1)
+    await until(() => fromPanel.length === 1, 'the click to reach the stand-in')
     expect(fromPanel[0]).toMatchObject({ type: 'input_mouse', eventType: 'mousePressed', x: 5 })
     p.message(JSON.stringify({ type: 'handback' }))
-    await until(() => last('state')?.driver === 'agent')
+    await until(() => last('state')?.driver === 'agent', 'the agent to be driving again')
     expect(told[1]).toContain('handed the shared browser back')
     await b.close('SHE-9')
   })
@@ -108,43 +157,43 @@ describe('a task’s browser', () => {
   test('an idle agent hears of a take-over only when it drives the browser meanwhile, and once', async () => {
     const { panel, told, last, b } = setup({ working: false })
     const p = panel()
-    await until(() => streamSocks.size === 1)
+    await until(() => streamSocks.size === 1, 'the panel’s stream to the stand-in')
     p.message(JSON.stringify({ type: 'take' }))
-    await until(() => last('state')?.driver === 'you')
+    await until(() => last('state')?.driver === 'you', 'you to be driving')
     expect(told).toEqual([])
     await wait(350)
     toPanels({ type: 'command', action: 'click' })
     toPanels({ type: 'command', action: 'fill' })
-    await until(() => told.length > 0)
+    await until(() => told.length > 0, 'the agent to hear of the take-over')
     await wait(50)
     expect(told).toHaveLength(1)
     // its command shows as it driving
-    await until(() => last('state')?.agentAgo !== undefined)
+    await until(() => last('state')?.agentAgo !== undefined, 'the agent’s command to show')
     await b.close('SHE-9')
   })
 
   test('the address bar, back, forward and reload move the page over DevTools, only while you drive', async () => {
     const { panel, last, b } = setup()
     const p = panel()
-    await until(() => streamSocks.size === 1)
+    await until(() => streamSocks.size === 1, 'the panel’s stream to the stand-in')
     p.message(JSON.stringify({ type: 'go', url: 'example.com' }))
     await wait(100)
     expect(cdpCalls).toEqual([])
     p.message(JSON.stringify({ type: 'take' }))
-    await until(() => last('state')?.driver === 'you')
+    await until(() => last('state')?.driver === 'you', 'you to be driving')
     p.message(JSON.stringify({ type: 'go', url: 'example.com' }))
-    await until(() => cdpCalls.some((c) => c.method === 'Page.navigate'))
+    await until(() => cdpCalls.some((c) => c.method === 'Page.navigate'), 'the page to navigate')
     expect(cdpCalls.find((c) => c.method === 'Page.navigate')).toMatchObject({ params: { url: 'https://example.com' }, sessionId: 'S1' })
     expect(cdpCalls.find((c) => c.method === 'Target.attachToTarget')?.params).toEqual({ targetId: 'T1', flatten: true })
     p.message(JSON.stringify({ type: 'back' }))
-    await until(() => cdpCalls.some((c) => c.method === 'Page.navigateToHistoryEntry'))
+    await until(() => cdpCalls.some((c) => c.method === 'Page.navigateToHistoryEntry'), 'the page to step back')
     expect(cdpCalls.find((c) => c.method === 'Page.navigateToHistoryEntry')?.params).toEqual({ entryId: 11 })
     p.message(JSON.stringify({ type: 'go', url: 'javascript:alert(1)' }))
-    await until(() => last('error') !== undefined)
+    await until(() => last('error') !== undefined, 'the panel to be told why')
     expect(cdpCalls.filter((c) => c.method === 'Page.navigate')).toHaveLength(1)
     // our own commands (the viewport) are not the agent driving
     p.message(JSON.stringify({ type: 'viewport', w: 390, h: 700 }))
-    await until(() => calls().some((c) => c.args[0] === 'set'))
+    await until(() => calls().some((c) => c.args[0] === 'set'), 'the viewport to reach the stand-in')
     expect(calls().find((c) => c.args[0] === 'set')?.args).toEqual(['set', 'viewport', '390', '700'])
     await b.close('SHE-9')
   })
@@ -152,9 +201,9 @@ describe('a task’s browser', () => {
   test('Annotate: a tap is resolved at its page point, and nothing on the live page is resized for a screenshot', async () => {
     const { panel, last, b } = setup()
     const p = panel()
-    await until(() => streamSocks.size === 1)
+    await until(() => streamSocks.size === 1, 'the panel’s stream to the stand-in')
     p.message(JSON.stringify({ type: 'pick', id: 3, x: 50, y: 35 }))
-    await until(() => last('picked') !== undefined)
+    await until(() => last('picked') !== undefined, 'the tap to be resolved')
     const r = last('picked')!
     expect(r.error).toBeUndefined()
     // the page is scrolled 400px: DevTools hit-tests in page coordinates
@@ -162,6 +211,8 @@ describe('a task’s browser', () => {
     expect(r.pick).toMatchObject({ element: 'button "Save"', selector: 'form > button.primary', url: 'http://localhost:5173/settings' })
     // the shot is cropped on the screen from the frame you saw: a DevTools clip would resize the live page
     expect(cdpCalls.some((c) => c.method === 'Page.captureScreenshot')).toBe(false)
+    // the element is released after the reply is on its way: it lands a packet later, not before the tap is answered
+    await until(() => cdpCalls.some((c) => c.method === 'Runtime.releaseObject'), 'the tapped element to be released')
     expect(cdpCalls.some((c) => c.method === 'Runtime.releaseObject')).toBe(true)
     await b.close('SHE-9')
   })
@@ -170,7 +221,7 @@ describe('a task’s browser', () => {
     state({ fail: 'Chrome not found: run agent-browser install' })
     const { panel, last, b } = setup()
     panel()
-    await until(() => last('error') !== undefined)
+    await until(() => last('error') !== undefined, 'the panel to be told why')
     expect(last('error')!.message).toContain('Chrome is missing on vm-test')
     await b.close('SHE-9')
   })
@@ -179,25 +230,25 @@ describe('a task’s browser', () => {
     state({ clash: 1 })
     const { panel, last, b } = setup()
     panel()
-    await until(() => !!last('state')?.connected)
+    await until(() => !!last('state')?.connected, 'the stand-in to be connected')
     expect(last('error')).toBeUndefined()
     await b.close('SHE-9')
 
     state({ clash: 99 })
     const s = setup()
     s.panel()
-    await until(() => s.last('error') !== undefined)
+    await until(() => s.last('error') !== undefined, 'the panel to be told why it keeps restarting')
     expect(s.last('error')!.message).toBe(`Another agent-browser (another version, or other settings) is using this browser, so it keeps restarting. The agent should run ${FAKE}, the version Shepherdr pins, without --session or --profile.`)
     await s.b.close('SHE-9')
   })
 
   test('agent-browser missing: the item says so and nothing runs', async () => {
     const { b, panel, last } = setup({ bin: join(dir, 'nope') })
-    await until(() => !!b.status().hint && !b.status().hint!.startsWith('Checking'))
+    await until(() => !!b.status().hint && !b.status().hint!.startsWith('Checking'), 'the stand-in’s version check to answer')
     expect(b.status()).toMatchObject({ ready: false })
     expect(b.status().hint).toContain('agent-browser is missing on vm-test')
     panel()
-    await until(() => last('error') !== undefined)
+    await until(() => last('error') !== undefined, 'the panel to be told why')
   })
 
   test('a task stopped closes its browser and keeps its sign-ins; merged, the profile goes too; the panel is told', async () => {
@@ -205,7 +256,7 @@ describe('a task’s browser', () => {
     mkdirSync(profileOf('SHE-9'), { recursive: true })
     const { b, panel, last, closed } = setup()
     panel()
-    await until(() => streamSocks.size === 1)
+    await until(() => streamSocks.size === 1, 'the panel’s stream to the stand-in')
     await b.close('SHE-9')
     expect(closed()).toBe(true)
     expect(last('error')?.message).toContain('closed with the task')
@@ -265,6 +316,7 @@ describe('a task’s browser', () => {
       writeFileSync(usedMark(profileOf('SHE-92')), '')
       utimesSync(usedMark(profileOf('SHE-92')), (now + 8 * MIN) / 1000, (now + 8 * MIN) / 1000)
       const panel = b.attach('SHE-94', { send: () => undefined, close: () => undefined })
+      panels.push(panel)
       expect(await b.closeIdle(now + 5 * MIN)).toEqual([])
       expect(await b.closeIdle(now + 11 * MIN)).toEqual(['SHE-91'])
       expect(await Promise.race([idle.exited, wait(3000).then(() => 'running')])).not.toBe('running')
@@ -274,7 +326,7 @@ describe('a task’s browser', () => {
       expect(existsSync(profileOf('SHE-91'))).toBe(true)
       // the agent's last command 10 minutes back, the screen gone 10 minutes back: those close too (once the screen's
       // start is over: a browser still starting is kept)
-      await until(() => streamSocks.size === 1)
+      await until(() => streamSocks.size === 1, 'the panel’s stream to the stand-in')
       panel.end()
       expect((await b.closeIdle(now + 19 * MIN)).sort()).toEqual(['SHE-92', 'SHE-94'])
       // off: never
@@ -320,7 +372,7 @@ describe('a task’s browser', () => {
     state({ connected: true, sessions: ['SHE-9'] })
     const later = join(dir, 'later')
     const { b } = setup({ bin: later })
-    await until(() => !!b.status().hint && !b.status().hint!.startsWith('Checking'))
+    await until(() => !!b.status().hint && !b.status().hint!.startsWith('Checking'), 'the stand-in’s version check to answer')
     symlinkSync(FAKE, later)
     await b.close('SHE-9')
     expect(calls().some((c) => c.args[0] === 'close' && c.session === 'SHE-9')).toBe(true)
