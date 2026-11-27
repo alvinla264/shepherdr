@@ -1003,6 +1003,9 @@ function NewLine() {
   )
 }
 
+/** a message's time; one formatter for every row, as toLocaleTimeString makes a new one for each message drawn */
+const clock = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' })
+
 /** one message (or album, or card) across the chat's width, its time just past the right edge for a slide to show */
 function Row({ at, arrive, children }: { at: number; arrive: string; children: ReactNode }) {
   return (
@@ -1014,7 +1017,7 @@ function Row({ at, arrive, children }: { at: number; arrive: string; children: R
           aria-hidden="true"
           className="pointer-events-none absolute bottom-1.5 left-full ml-3 text-[0.75rem] whitespace-nowrap text-fg3 tabular-nums opacity-[var(--peek,0)] phone:ml-4 phone:text-[0.8125rem]"
         >
-          {new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          {clock.format(new Date(at))}
         </time>
       ) : null}
     </div>
