@@ -750,12 +750,15 @@ describe('settings', () => {
       expect(s.set('web.publicUrl', bad).ok).toBe(false)
     expect(s.set('web.publicUrl', '', 'machine').ok).toBe(true)
     expect(s.web()).toEqual({ proxy: '10.0.0.1', publicUrl: '' })
-    for (const k of ['web.proxy', 'web.publicUrl']) s.set(k, null)
+    for (const k of ['web.proxy', 'web.publicUrl']) {
+      s.set(k, null)
+      s.set(k, null, 'machine')
+    }
     expect(s.web()).toEqual({ proxy: 'off', publicUrl: '' })
   })
   test('forwarded headers count only when the connection comes from the named proxy, by its address', () => {
     const req = (headers: Record<string, string>) => new Request('http://127.0.0.1:7787/api/snapshot', { headers })
-    const sent = { 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2' }
+    const sent = { host: '127.0.0.1:7787', 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2' }
     const cfg = { proxy: '127.0.0.1', publicUrl: '' }
     expect(webShape(req(sent), '127.0.0.1', cfg)).toMatchObject({ proxied: true, host: 'shep.example.com', publicUrl: 'https://shep.example.com', forwardedFor: '10.8.0.2', secure: true })
     // any other peer: its headers are not believed, and the request's own host counts
