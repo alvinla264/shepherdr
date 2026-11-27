@@ -1330,6 +1330,10 @@ export function QuestionCard(p: CardProps) {
   return p.q.parts ? <PartsCard {...p} /> : <SingleCard {...p} />
 }
 
+/** the pick box on a choice: a checkbox when several may be picked, a radio for one */
+const pickBox = (multi?: boolean) =>
+  clsx('size-4 shrink-0 shadow-[inset_0_0_0_1.5px_var(--fg3)] group-aria-pressed:shadow-[inset_0_0_0_5px_var(--fg)]', multi ? 'rounded-[4px]' : 'rounded-full')
+
 /** the picks kept on each question of a card that asks several, while the screen is */
 const chosenParts = new Map<string, number[]>()
 
@@ -1435,13 +1439,7 @@ function PartsCard({ q, chat, msg, from, space, source }: CardProps) {
                   onClick={() => choose(i, j)}
                   className="group press relative flex min-h-10 w-full items-center gap-2.5 rounded-row px-3 py-2 text-left shadow-[inset_0_0_0_1px_var(--line2)] enabled:hover:bg-hover disabled:cursor-default disabled:opacity-40 aria-pressed:shadow-[inset_0_0_0_1.5px_var(--fg)] disabled:aria-pressed:opacity-100 coarse:min-h-11 phone:min-h-12"
                 >
-                  <span
-                    aria-hidden="true"
-                    className={clsx(
-                      'size-4 shrink-0 shadow-[inset_0_0_0_1.5px_var(--fg3)] group-aria-pressed:shadow-[inset_0_0_0_5px_var(--fg)]',
-                      part.multi ? 'rounded-[4px]' : 'rounded-full',
-                    )}
-                  />
+                  <span aria-hidden="true" className={pickBox(part.multi)} />
                   {c.description ? (
                     <span>
                       <span className="block">{c.label}</span>
@@ -1594,13 +1592,7 @@ function SingleCard({ q, chat, msg, from, space, source }: CardProps) {
             }}
             className="group press relative flex min-h-10 w-full items-center gap-2.5 rounded-row px-3 py-2 text-left shadow-[inset_0_0_0_1px_var(--line2)] enabled:hover:bg-hover disabled:cursor-default disabled:opacity-40 aria-pressed:shadow-[inset_0_0_0_1.5px_var(--fg)] disabled:aria-pressed:opacity-100 coarse:min-h-11 phone:min-h-12"
           >
-            {immediate ? null : <span
-              aria-hidden="true"
-              className={clsx(
-                'size-4 shrink-0 shadow-[inset_0_0_0_1.5px_var(--fg3)] group-aria-pressed:shadow-[inset_0_0_0_5px_var(--fg)]',
-                q.multi ? 'rounded-[4px]' : 'rounded-full',
-              )}
-            />}
+            {immediate ? null : <span aria-hidden="true" className={pickBox(q.multi)} />}
             {c.description ? (
               <span>
                 <span className="block">{immediate ? `Send: ${c.label}` : c.label}</span>
