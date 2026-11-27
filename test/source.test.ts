@@ -2358,7 +2358,7 @@ describe("shepherdr doctor's web line", () => {
     web.reset()
     const app = startApp({ source: src, dist: '/nonexistent', port: 0 })
     try {
-      await fetch(`http://127.0.0.1:${app.port}/api/snapshot`, { headers: { 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2' } })
+      await fetch(`http://127.0.0.1:${app.port}/api/snapshot`, { headers: { 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2', 'sec-fetch-mode': 'cors' } })
       const line = (await src.cli(['doctor'], {})).out.split('\n').find((l) => l.startsWith('Web: '))
       expect(line).toBe('Web: through the proxy 127.0.0.1, asked for shep.example.com from 10.8.0.2, and links use https://shep.example.com; the live link has not been tried yet.')
     } finally {

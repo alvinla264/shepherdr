@@ -79,11 +79,12 @@ server {
   # an installed app fetches these itself, with no page behind them: the manifest (with the page's cookie,
   # crossorigin="use-credentials") and the service worker (same-origin, with the cookie) must reach the app, not a
   # sign-in page, or the home-screen install fails and alerts cannot subscribe. They carry no data of yours.
+  #
+  # Exact matches only. Never exempt a prefix such as /assets/ or /icon-: the app strips whatever comes before /api/,
+  # so /assets/api/snapshot would become an unauthenticated /api/snapshot. Icons and splash screens stay behind the
+  # gate; the browser fetches them with the session cookie.
   location = /manifest.webmanifest { auth_request off; proxy_pass http://127.0.0.1:7787; }
   location = /sw.js                { auth_request off; proxy_pass http://127.0.0.1:7787; }
-  location ^~ /icon-               { auth_request off; proxy_pass http://127.0.0.1:7787; }
-  location ^~ /splash/             { auth_request off; proxy_pass http://127.0.0.1:7787; }
-  location ^~ /assets/             { auth_request off; proxy_pass http://127.0.0.1:7787; }
 }
 ```
 
@@ -139,8 +140,9 @@ shep.example.com {
     reverse_proxy 127.0.0.1:9091
   }
 
-  # install and alerts: no page behind them
-  @install path /manifest.webmanifest /sw.js /icon-* /splash/* /assets/*
+  # install and alerts: no page behind them, exact paths only (a prefix like /assets/* would also match
+  # /assets/api/snapshot, which the app strips to /api/snapshot)
+  @install path /manifest.webmanifest /sw.js
   handle @install {
     reverse_proxy 127.0.0.1:7787
   }
@@ -212,7 +214,8 @@ the host it was asked for, whether the live link has been upgrading, and whether
 | Links open `127.0.0.1` | `X-Forwarded-Host` is missing or `web.publicUrl` is empty. |
 | `shepherdr checks` or a voice call cuts off | `proxy_read_timeout`/`proxy_send_timeout` are still 60s. |
 | A big file in a chat fails | `client_max_body_size`. |
-| The app cannot be added to the home screen, or alerts cannot subscribe | the manifest or `sw.js` is answered by the sign-in page. |
+| The app cannot be added to the home screen, or alerts cannot subscribe | the manifest or `sw.js` is answered by the sign-in page; exempt exactly those two. |
+| A request without a session reaches `/api/...` | a `location` with `auth_request off` matches a prefix that can carry `/api/` (the app strips anything before it). |
 
 Browser DevTools → Network says it clearest: `/api/ws` is `101 Switching Protocols` when the live link is right, and
 anything else (a `200` sign-in page, a `302`, a `400`) means the proxy is not upgrading it.

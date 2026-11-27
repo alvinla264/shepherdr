@@ -130,58 +130,83 @@ export function webShape(req: Request, peer: string | null | undefined, cfg: Web
 }
 
 export interface LinkCounts {
-  /** live-link upgrades this server tried */
-  upgrades: number
-  /** of those, the ones it refused (a proxy that does not pass WebSockets usually refuses every one) */
-  failures: number
-  lastFailureAt: number | null
+  /** upgrade attempts this server saw (plus the refusals a browser reported when the proxy stopped them before here) */
+  attempts: number
+  /** of those, the ones that opened a live link */
+  upgraded: number
+  /** of those, the ones refused */
+  refused: number
+  lastRefusedAt: number | null
 }
 
-const state: { last: WebShape | null; upgrades: number; failures: number; lastFailureAt: number | null } = {
+const state: { last: WebShape | null; address: string; explicit: string; attempts: number; upgraded: number; refused: number; lastRefusedAt: number | null } = {
   last: null,
-  upgrades: 0,
-  failures: 0,
-  lastFailureAt: null,
+  address: '',
+  explicit: '',
+  attempts: 0,
+  upgraded: 0,
+  refused: 0,
+  lastRefusedAt: null,
 }
 
-/** the last request's shape, and how the live link has been going, as `shepherdr doctor` reports them */
+/** the last browser request's shape, and how the live link has been going, as `shepherdr doctor` reports them */
 export const web = {
-  see(shape: WebShape) {
+  /** `browser`: this request came from a browser (a page, its fetch or its socket), not a program on this machine:
+   *  doctor asks about the web shape a browser is reached through, so the command channel and health checks say nothing */
+  see(shape: WebShape, cfg: WebConfig, browser = true) {
+    state.explicit = cleanBase(cfg.publicUrl)
+    if (!browser) return
     state.last = shape
+    if (!parseProxy(cfg.proxy)?.length) state.address = ''
+    else if (shape.publicUrl) state.address = shape.publicUrl
   },
   /** a live-link upgrade was tried, and whether the server could take it */
   upgrade(ok: boolean) {
-    state.upgrades++
-    if (ok) return
-    state.failures++
-    state.lastFailureAt = Date.now()
+    state.attempts++
+    if (ok) state.upgraded++
+    else {
+      state.refused++
+      state.lastRefusedAt = Date.now()
+    }
+  },
+  /**
+   * A browser that reached the page but never opened the live link: the proxy refused the upgrade before it got here,
+   * so the server could not count it itself. The browser reports it, and doctor can say so.
+   */
+  refusedByProxy() {
+    state.attempts++
+    state.refused++
+    state.lastRefusedAt = Date.now()
   },
   get last(): WebShape | null {
     return state.last
   },
   get links(): LinkCounts {
-    return { upgrades: state.upgrades, failures: state.failures, lastFailureAt: state.lastFailureAt }
+    return { attempts: state.attempts, upgraded: state.upgraded, refused: state.refused, lastRefusedAt: state.lastRefusedAt }
   },
-  /** the address pushes and other links should open, when one is known: the public address, else the proxy's host */
+  /** the address pushes and other links should open, when one is known: web.publicUrl, else the proxy's host */
   base(): string {
-    return state.last?.publicUrl ?? ''
+    return state.explicit || state.address
   },
   /** tests only: forget the last request and its counts */
   reset() {
     state.last = null
-    state.upgrades = 0
-    state.failures = 0
-    state.lastFailureAt = null
+    state.address = ''
+    state.explicit = ''
+    state.attempts = 0
+    state.upgraded = 0
+    state.refused = 0
+    state.lastRefusedAt = null
   },
 }
 
 /** doctor's one line about the web shape: through what, asked for what, and whether the live link upgrades */
 export function webLine(cfg: WebConfig, last: WebShape | null, links: LinkCounts, ago: (at: number) => string): string {
   const live =
-    links.upgrades === 0 && links.failures === 0
+    links.attempts === 0
       ? 'the live link has not been tried yet'
-      : `the live link upgraded ${links.upgrades} time${links.upgrades === 1 ? '' : 's'}${
-          links.failures ? `, ${links.failures} refused${links.lastFailureAt ? ` (last ${ago(links.lastFailureAt)} ago)` : ''}` : ''
+      : `the live link upgraded ${links.upgraded} time${links.upgraded === 1 ? '' : 's'}${
+          links.refused ? `, ${links.refused} refused${links.lastRefusedAt ? ` (last ${ago(links.lastRefusedAt)} ago)` : ''}` : ''
         }`
   const rules = parseProxy(cfg.proxy) ?? []
   if (!rules.length) {

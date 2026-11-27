@@ -780,8 +780,11 @@ async function sayDown() {
   const at = downSince ?? Date.now()
   const reachable = await fetch('api/version', { cache: 'no-store', signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false)
   if (ws?.readyState === WebSocket.OPEN) return
-  if (reachable) setUI({ liveDown: at, offline: null })
-  else setUI({ offline: at, liveDown: null })
+  if (reachable) {
+    setUI({ liveDown: at, offline: null })
+    // the proxy refused it before the server could see it: tell the server, so shepherdr doctor can say so too
+    void fetch('api/live-failed', { method: 'POST', headers: { 'x-shepherdr': '1' } }).catch(() => undefined)
+  } else setUI({ offline: at, liveDown: null })
 }
 
 /** back on screen (or on the network): an open link must answer a ping, any other is tried again at once */

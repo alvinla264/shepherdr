@@ -773,12 +773,12 @@ describe('settings', () => {
   })
   test("doctor's line: through what, asked for what, and whether the live link upgrades", () => {
     const ago = () => '2m'
-    const none = { upgrades: 0, failures: 0, lastFailureAt: null }
+    const none = { attempts: 0, upgraded: 0, refused: 0, lastRefusedAt: null }
     const plain = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787' } }), '127.0.0.1', { proxy: 'off', publicUrl: '' })
     expect(webLine({ proxy: 'off', publicUrl: '' }, plain, none, ago)).toBe('Web: no proxy configured, asked for 127.0.0.1:7787; the live link has not been tried yet.')
     const cfg = { proxy: '127.0.0.1', publicUrl: '' }
     const proxied = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787', 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.8.0.2' } }), '127.0.0.1', cfg)
-    expect(webLine(cfg, proxied, { upgrades: 12, failures: 1, lastFailureAt: Date.now() }, ago)).toBe('Web: through the proxy 127.0.0.1, asked for shep.example.com from 10.8.0.2, and links use https://shep.example.com; the live link upgraded 12 times, 1 refused (last 2m ago).')
+    expect(webLine(cfg, proxied, { attempts: 13, upgraded: 12, refused: 1, lastRefusedAt: Date.now() }, ago)).toBe('Web: through the proxy 127.0.0.1, asked for shep.example.com from 10.8.0.2, and links use https://shep.example.com; the live link upgraded 12 times, 1 refused (last 2m ago).')
     // the proxy is named, but the last request came round it
     const direct = webShape(new Request('http://127.0.0.1:7787/api/snapshot', { headers: { host: '127.0.0.1:7787' } }), '10.8.0.7', cfg)
     expect(webLine(cfg, direct, none, ago)).toBe('Web: the proxy 127.0.0.1 is configured, but the last request came from 10.8.0.7 directly; forwarded headers are ignored, the host asked for was 127.0.0.1:7787, and links stay relative to the page; the live link has not been tried yet.')

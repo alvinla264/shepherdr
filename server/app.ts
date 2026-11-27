@@ -115,8 +115,11 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
       const path = at >= 0 ? url.pathname.slice(at) : url.pathname
       const q = url.searchParams
       // the shape this request came through: the peer address is the only thing a trust decision rests on, never a header
-      const shape = webShape(req, srv.requestIP(req)?.address, source.web?.() ?? { proxy: 'off', publicUrl: '' })
-      web.see(shape)
+      const cfg = source.web?.() ?? { proxy: 'off', publicUrl: '' }
+      const shape = webShape(req, srv.requestIP(req)?.address, cfg)
+      // a browser names itself (Origin, Fetch Metadata); a program here (the command channel, a health check) does not
+      const browser = ['origin', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-site'].some((h) => req.headers.has(h))
+      web.see(shape, cfg, browser)
 
       // only this app's own pages may act: another website in your browser can't (no cross-site requests)
       if (path.startsWith('/api/') && path !== '/api/font/InterVariable.woff2' && !sameSite(req, path, shape.host)) return new Response('forbidden', { status: 403 })
@@ -141,6 +144,12 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
         if (path === '/api/snapshot') return json(source.snapshot())
         // which Shepherdr answers: a start from another plugin folder or version stops it (scripts/plugin.ts)
         if (path === '/api/version') return json(running())
+        // the page answers but the live link cannot open: the proxy is refusing the upgrade before it reaches here, so
+        // the browser says so and doctor can report it (a request the proxy never let through is never counted)
+        if (path === '/api/live-failed' && req.method === 'POST') {
+          web.refusedByProxy()
+          return json({ ok: true })
+        }
         // the updater restarts the server only once it has stopped new calls and none is on; both at once, so no call
         // can start in between. It lifts the stop again while it waits for a call to end.
         if (path === '/api/drain' && req.method === 'POST') {

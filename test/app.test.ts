@@ -375,26 +375,38 @@ describe('behind a trusted proxy', () => {
   test('the public address: the trusted host by default, or the one the human set', async () => {
     const host = `127.0.0.1:${server.port}`
     configurable.web = () => ({ proxy: '127.0.0.1', publicUrl: 'https://shep.example.com/' })
-    await fetch(`${base}/api/snapshot`, { headers: { host, 'x-forwarded-host': 'inner.example.com', 'x-forwarded-proto': 'https' } })
+    await fetch(`${base}/api/snapshot`, { headers: { host, 'x-forwarded-host': 'inner.example.com', 'x-forwarded-proto': 'https', 'sec-fetch-mode': 'cors' } })
     expect(web.base()).toBe('https://shep.example.com')
     // no explicit address, and no trusted proxy: links stay relative
     configurable.web = () => ({ proxy: 'off', publicUrl: '' })
-    await fetch(`${base}/api/snapshot`, { headers: { host, 'x-forwarded-host': 'shep.example.com' } })
+    await fetch(`${base}/api/snapshot`, { headers: { host, 'x-forwarded-host': 'shep.example.com', 'sec-fetch-mode': 'cors' } })
     expect(web.base()).toBe('')
   })
   test('the live link counts every upgrade it tried, and the ones it refused', async () => {
     configurable.web = () => ({ proxy: 'off', publicUrl: '' })
     const before = web.links
-    // a plain GET cannot be upgraded
+    // a plain GET cannot be upgraded: it is an attempt, and a refusal, never an upgrade
     expect((await fetch(`${base}/api/ws`)).status).toBe(400)
-    expect(web.links).toMatchObject({ upgrades: before.upgrades + 1, failures: before.failures + 1 })
+    expect(web.links).toMatchObject({ attempts: before.attempts + 1, upgraded: before.upgraded, refused: before.refused + 1 })
     const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/ws`)
     const got: { type: string }[] = []
     ws.onmessage = (e) => got.push(JSON.parse(String(e.data)))
     await new Promise((r) => (ws.onopen = r))
     while (!got.some((m) => m.type === 'snapshot')) await new Promise((r) => setTimeout(r, 10))
-    expect(web.links.upgrades).toBe(before.upgrades + 2)
-    expect(web.links.failures).toBe(before.failures + 1)
+    expect(web.links).toMatchObject({ attempts: before.attempts + 2, upgraded: before.upgraded + 1, refused: before.refused + 1 })
     ws.close()
+    // a browser whose proxy refuses the upgrade before it reaches here reports it, so doctor is not blind to it
+    await fetch(`${base}/api/live-failed`, { method: 'POST', headers: { 'x-shepherdr': '1', origin: base } })
+    expect(web.links.refused).toBe(before.refused + 2)
+  })
+  test('a program on this machine does not erase what the browser taught doctor', async () => {
+    configurable.web = () => ({ proxy: '127.0.0.1', publicUrl: '' })
+    const host = `127.0.0.1:${server.port}`
+    await fetch(`${base}/api/snapshot`, { headers: { host, 'x-forwarded-host': 'shep.example.com', 'x-forwarded-proto': 'https', 'sec-fetch-mode': 'cors' } })
+    expect(web.base()).toBe('https://shep.example.com')
+    // the command channel's own request (doctor runs through it) has no forwarded headers
+    await fetch(`${base}/api/cli`, { method: 'POST', headers: { 'content-type': 'application/json', host }, body: JSON.stringify({ args: ['doctor'] }) })
+    expect(web.last).toMatchObject({ proxied: true, host: 'shep.example.com' })
+    expect(web.base()).toBe('https://shep.example.com')
   })
 })
