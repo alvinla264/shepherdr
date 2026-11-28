@@ -43,6 +43,7 @@ import * as task from './mfs.ts'
 import { asMode, HOME_SPACE, HOST, NAME, placeId, Places } from './places.ts'
 import { privatePrompt, coordinatorPrompt, relaunchedLine, restartLine, resumedLine, settingsBlock } from './prompts.ts'
 import { fitHarness, harnessProblem, harnessWords, recentChat, restartHint, restartInfo, type Harness } from './restart.ts'
+import { HANDOFF_CAPS } from './handoff.ts'
 import { Revivals, type Wrong } from './revive.ts'
 import { missingWords, type PaneState } from './pane.ts'
 import { carryOn, Retries, type Retry } from './retry.ts'
@@ -2397,6 +2398,17 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
   }
 
   /** a task's agent says how far along it is: shepherdr status <id> "<line>" --done <0-100> [--left 5m] */
+  /** a task's agent keeps a note for whoever takes it over: shepherdr handoff "<a few lines>" (a coordinator names it) */
+  private handoffCommand(id: string | undefined, words: (string | undefined)[]) {
+    const text = words.filter((w): w is string => !!w).join(' ').trim()
+    const t = id ? this.engine.task(id) : undefined
+    if (!t) throw new Error(`${id && !this.engine.task(id) ? `No task ${id}; ` : ''}shepherdr handoff "<what is done, what is next, the traps, the files you touched>" (a task's agent writes its own; anyone else: shepherdr handoff <id> "<note>")`)
+    if (!text) throw new Error(`Write the note in words: what is done, what is next, the traps, the files you touched.`)
+    const r = this.engine.handoff(t.id, text)
+    const notes = [r.stripped ? 'Something that looked like a credential in it was removed: never put a secret value in a note.' : '', r.cut ? `Cut to ${HANDOFF_CAPS.note} characters.` : ''].filter(Boolean)
+    return `Noted: ${t.id}'s handoff note is set (${r.note.text.length} characters) and shows in its chat. Keep it current at each milestone.${notes.length ? ` ${notes.join(' ')}` : ''}`
+  }
+
   private reportCommand(id: string, words: string[], p: Parsed, ctx: { chat?: string }) {
     const t = this.engine.task(id)
     if (!t) throw new Error(`No task ${id}; shepherdr status <id> "<line>" --done <0-100> [--left 5m]`)
@@ -2489,6 +2501,12 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
         if (ctx.chat?.includes('/') && ctx.chat.split('/')[0].toUpperCase() !== t.id.toUpperCase()) throw new Error(`A task's agent says only its own task waits, not ${t.id}.`)
         this.engine.todo(t.id)
         return `Noted: ${t.id} shows as To do until it gets a go. Reply in one line that you have the brief, then end your turn.`
+      }
+      case 'handoff': {
+        // a task's agent writes its own task's note; anyone else names the task
+        const own = ctx.chat?.includes('/') ? ctx.chat.split('/')[0] : undefined
+        if (own && a1 && a1.toUpperCase() !== own.toUpperCase() && this.engine.task(a1)) throw new Error(`A task's agent writes only its own task's handoff note, not ${a1}'s.`)
+        return this.handoffCommand(own ?? a1, !own || a1?.toUpperCase() === own.toUpperCase() ? rest : [a1, ...rest])
       }
       case 'merge':
         return this.mergeCommand(a1, ctx)

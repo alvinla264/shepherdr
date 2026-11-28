@@ -1225,6 +1225,16 @@ export class Agents extends Emitter<Events> {
     return this.outbox.filter((o) => o.key === key)
   }
 
+  /** words that never went in and are wanted no more (a last note asked of an agent that is going): taken out of its
+   *  outbox, so the agent after it isn't told them */
+  drop(key: string, id: string) {
+    const i = this.outbox.findIndex((o) => o.key === key && o.id === id)
+    if (i < 0) return false
+    this.outbox.splice(i, 1)
+    this.save()
+    return true
+  }
+
   /** what went in with a screen's id in the last ten minutes, oldest first; at is when it went in */
   sentLately(key: string) {
     const now = Date.now()

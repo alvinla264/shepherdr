@@ -52,9 +52,19 @@
   written to the agent starts the count again. Each CLI's log says what cut it off (`server/live/retry.ts` decides).
 - When a task's agent can't go on (out of allowance, signed out, its provider still down after the tries), its
   **backup agent** takes over, once: Settings → Agents → Tasks → Backup (`task.fallback`, Codex unless set, or off).
-  It starts in the same worktree and branch, on its CLI's own model, with the brief and a short handover: who it takes
-  over from and why, the branch's commits, what lies uncommitted and the chat so far. A card in the task's chat says
-  so. If the backup can't go on either, or isn't installed, the task needs you.
+  It starts in the same worktree and branch, on its CLI's own model, with the brief and a short handover (the package
+  below): who it takes over from and why, the human's first words, the task's handoff note and the facts. A card in
+  the task's chat says so. If the backup can't go on either, or isn't installed, the task needs you.
+- What a task's next agent is handed, whoever switches it (the restart sheet to another CLI, or a backup), is built
+  in `server/live/handoff.ts` and labelled so it can tell a fact from a claim: the brief as it was given, the
+  human's first messages verbatim, the task's handoff note, the note the outgoing agent wrote at the switch when it
+  was still there, and the facts (commits, `git status --short`, the branch's diff stat, the agent's own status line).
+  Each part is capped by size (a few thousand characters in all, around 1.5k tokens) and an obvious credential is
+  stripped. The agent keeps that note current itself: `shepherdr handoff "<what is done, what is next, the traps, the
+  files you touched>"` (a few lines), one note per task, replaced in place and shown as one card in its chat; a
+  coordinator names the task. At a deliberate switch to another CLI the agent is asked once for a last note, under
+  about 90 seconds, and only while its pane still holds it; a dying agent never blocks the switch. A same-CLI resume
+  keeps its session and is told none of this. The card "Handoff to <CLI>" in the task's chat shows the whole package.
 - Status, coordinators' too, is what the agent reports of itself. Every Claude Code Shepherdr starts gets a settings
   file of its own (`--settings`, in `~/.shepherdr/hooks/`; your own settings are never touched) whose hooks record
   each event: a turn starts or ends, what still runs in the background as it ends, a permission prompt (a subagent's

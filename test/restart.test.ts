@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { asRecorded, fitHarness, harnessProblem, harnessWords, launchHarness, recentChat, restartHint, restartInfo, sameHarness } from '../server/live/restart.ts'
 import { setModels, TABLE } from '../server/live/models.ts'
-import { restartLine, resumedLine } from '../server/live/prompts.ts'
+import { finalNoteAsk, restartLine, resumedLine } from '../server/live/prompts.ts'
 
 describe('the restart hint', () => {
   test('says the first that differs: the CLI, the model, the effort', () => {
@@ -38,7 +38,7 @@ describe('a harness', () => {
 })
 
 describe('what the agent is told', () => {
-  test('another CLI takes over: who ran it, a task its commits and changes, the chat so far', () => {
+  test('another CLI takes over: who ran it, and the package it left', () => {
     const chat = recentChat(
       [
         { id: '1', who: 'you', text: 'The brief', at: 1 },
@@ -50,15 +50,34 @@ describe('what the agent is told', () => {
       'The brief',
     )
     expect(chat).toBe('Human: Use blue\n\nClaude Code: On it')
-    const task = restartLine({ from: 'Claude Code', to: 'Codex (GPT-6-Sol, high)', chat, commits: 'a1 Add x', changes: '' })
+    const task = restartLine({
+      from: 'Claude Code',
+      to: 'Codex (GPT-6-Sol, high)',
+      handoff: {
+        brief: 'The brief',
+        human: 'Use blue',
+        note: { text: 'Half done; next the tests', by: 'Claude Code', at: 1 },
+        commits: 'a1 Add x',
+        changes: '',
+      },
+    })
     expect(task).toContain('restarted this task on Codex (GPT-6-Sol, high). Claude Code ran it until now')
     expect(task).toContain('same worktree and branch')
+    expect(task).toContain("The task's handoff note (written by Claude Code")
     expect(task).toContain('Commits on the branch so far:\na1 Add x')
-    expect(task).toContain('Uncommitted changes:\nnone')
-    expect(task).toContain('Human: Use blue')
+    expect(task).toContain('Uncommitted changes (git status --short):\nnone')
+    expect(task).toContain('The human said:\n\nUse blue')
     const coord = restartLine({ from: 'Claude Code', to: 'Codex', chat })
     expect(coord).toContain('restarted this chat on Codex')
     expect(coord).not.toContain('Commits')
+  })
+
+  test('the last note is asked for only at a switch, labelled as the outgoing agent’s words, and only once', async () => {
+    expect(finalNoteAsk('Codex')).toContain('shepherdr handoff')
+    expect(finalNoteAsk('Codex')).toContain('about to be replaced')
+    const text = restartLine({ from: 'Claude Code', to: 'Codex', handoff: { brief: 'B', note: { text: 'living', by: 'Claude Code', at: 1 }, final: 'last words' } })
+    expect(text).toContain('The agent that ran it before you wrote:\n\nlast words')
+    expect(text.match(/living/g)).toHaveLength(1)
   })
 
   test('its own CLI resumes: carry on, or say nothing', () => {

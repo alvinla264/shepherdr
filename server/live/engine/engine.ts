@@ -21,11 +21,12 @@ import { browserEnv } from '../browser.ts'
 import { hidden, ROUTING_FAILURE, type Agents, type Spec } from '../agents.ts'
 import type { Chats } from '../chats.ts'
 import { HOST, placeId, type Places, type Space } from '../places.ts'
-import { privatePrompt, goLine, handOverLine, restartLine, resumedLine, settingsBlock, prNewsLine, queuedLine, splitBrief, taskFirst, taskPrompt } from '../prompts.ts'
+import { privatePrompt, goLine, handOverLine, restartLine, resumedLine, settingsBlock, prNewsLine, queuedLine, splitBrief, taskFirst, taskPrompt, finalNoteAsk } from '../prompts.ts'
+import { cap, HANDOFF_CAPS, humanFirst, redact, statusFacts, type Handoff, type HandoffNote } from '../handoff.ts'
 import { inMins, type Retry } from '../retry.ts'
 import { pastTimes } from '../estimates.ts'
 import { CLI_NAME, kindOf, type Settings } from '../settings.ts'
-import { fitHarness, harnessWords, recentChat } from '../restart.ts'
+import { fitHarness, harnessWords } from '../restart.ts'
 import * as G from './git.ts'
 import { Worktrees, type HerdrSpaces, type Made } from './worktrees.ts'
 
@@ -109,6 +110,8 @@ export interface TaskRec {
   /** shepherdr merge waits for GitHub's checks, as its brief's Settings block said when it was added (Settings, or
    *  task add --set); none: a task from before, which follows Settings as they are now */
   waitChecks?: boolean
+  /** its agent's living handoff note (shepherdr handoff): one per task, replaced in place, readable at any moment */
+  handoff?: HandoffNote
   /** what its agent last said of its own progress (shepherdr status): kept while it works or waits on you */
   report?: Reported
   /** its backup agent took over once its agent couldn't go on (retry.ts): from which CLI, to which, and why */
@@ -376,6 +379,8 @@ export class Engine extends Emitter<Events> {
   machine?: () => { busy?: 'cpu' | 'memory'; herdr: boolean } | undefined
   /** the time this engine decides starts by: a health sample's own, or a test's, never two clocks for one rule */
   time: () => number = Date.now
+  /** how long an outgoing agent gets to write its last note at a deliberate switch: a dying agent never blocks it */
+  handoffWait = 90_000
   /** when a held task last started while load decided */
   private lastStart = 0
   private releasing = false
@@ -1194,11 +1199,15 @@ export class Engine extends Emitter<Events> {
     const words = harnessWords(h)
     this.handing.add(t.id)
     try {
-      // what it is told, read once its turn has stopped: what it did meanwhile counts
+      // a deliberate switch to another CLI: ask it for a last note while it can still write one, then read what it has
+      const final = from === h.kind ? undefined : await this.finalNote(t, key, name(h.kind))
+      let told = ''
       const first = async () => {
+        // what it is told, read once its turn has stopped: what it did meanwhile counts
         await this.agents.stopTurn(key)
         if (from === h.kind) return hidden(resumedLine(words), 'restart')
-        return hidden(`${taskFirst(t)}\n\n${restartLine({ from: name(from), to: words, ...(await this.soFar(t, key, name(from))) })}`, 'restart')
+        told = restartLine({ from: name(from), to: words, handoff: { ...(await this.soFar(t, key)), ...(final ? { final } : {}) } })
+        return hidden(told, 'restart')
       }
       await this.launch(t, undefined, undefined, { ...h, model: h.model ?? '', effort: h.effort ?? '' }, first)
       // a pause or a stop is over: it carries on
@@ -1207,6 +1216,7 @@ export class Engine extends Emitter<Events> {
       t.agent = h
       const card = `restart:${t.id}:${Date.now()}`
       this.chats.post(key, { id: card, card: { id: card, restart: true, text: `Restarted on ${words}` } })
+      if (told) this.handed(key, name(h.kind), told)
     } finally {
       this.handing.delete(t.id)
       this.save()
@@ -1249,7 +1259,9 @@ export class Engine extends Emitter<Events> {
     t.tookOver = { from, to, why: why.charAt(0).toLowerCase() + why.slice(1), at: Date.now() }
     this.settle(t)
     try {
-      const first = `${taskFirst(t)}\n\n${handOverLine({ from: name(from), why: t.tookOver.why, ...(await this.soFar(t, key, name(from))) })}`
+      // the agent is usually gone here; asked only when its pane still holds it (finalNote checks before typing)
+      const final = await this.finalNote(t, key, name(to))
+      const first = handOverLine({ from: name(from), why: t.tookOver.why, handoff: { ...(await this.soFar(t, key)), ...(final ? { final } : {}) } })
       await this.agents.finish(key)
       // Settings' Backup model and effort (its project's), or else the task's own effort, as near as the backup's
       // model takes it
@@ -1257,6 +1269,7 @@ export class Engine extends Emitter<Events> {
       await this.launch(t, first, undefined, { kind: to, model: own.model, effort: own.effort ?? (t.agent ?? this.settings.harness('task', this.nameOf(t))).effort })
       const card = `takeover:${t.id}:${t.tookOver.at}`
       this.chats.post(key, { id: card, card: { id: card, text: `${name(to)} took over from ${name(from)}: ${t.tookOver.why}` } })
+      this.handed(key, name(to), first)
     } catch (e) {
       // the backup didn't start: it went wrong, and a later hand-over may try again
       t.trouble = troubleOf(e)
@@ -1267,13 +1280,54 @@ export class Engine extends Emitter<Events> {
     }
   }
 
-  /** what a backup agent is told was done: the branch's commits, what lies uncommitted, the chat's last messages */
-  private async soFar(t: TaskRec, key: string, them: string) {
+  /**
+   * The facts a next agent is given, alive or not: the brief as it was given, the human's first words, the living note,
+   * the branch's commits, what lies uncommitted and the branch's diff stat, and the agent's own status line. Each part
+   * is capped by handoff.ts, so the package stays a few thousand characters.
+   */
+  private async soFar(t: TaskRec, key: string): Promise<Handoff> {
     const out = async (...args: string[]) => {
       const r = await G.git(t.worktree!, ...args)
       return r.ok ? r.out.split('\n').filter(Boolean).slice(0, 20).join('\n') : ''
     }
-    return { commits: await out('log', '--oneline', `${t.base}..HEAD`), changes: await out('status', '--short'), chat: recentChat(this.chats.chat(key).messages, them, taskFirst(t).trim()) }
+    const brief = taskFirst(t)
+    return {
+      brief,
+      human: humanFirst(this.chats.chat(key).messages, brief.trim()),
+      note: t.handoff,
+      commits: await out('log', '--oneline', `${t.base}..HEAD`),
+      changes: await out('status', '--short'),
+      diffstat: await out('diff', '--stat', `${t.base}..HEAD`),
+      status: statusFacts(t),
+    }
+  }
+
+  /**
+   * The last note: the outgoing agent is asked once, while its pane still holds it (never a shell), and given until
+   * handoffWait for the note; then the switch goes on whether it answered or not. Nothing at all when it is gone.
+   */
+  private async finalNote(t: TaskRec, key: string, to: string): Promise<string | undefined> {
+    const pane = await this.agents.paneOf?.(key).catch(() => undefined)
+    if (pane?.state !== 'agent') return undefined
+    const before = t.handoff?.at ?? 0
+    const asked = Date.now()
+    const told = await this.agents.send(key, hidden(finalNoteAsk(to), 'handoff')).catch(() => undefined)
+    try {
+      for (const end = asked + this.handoffWait; Date.now() < end; ) {
+        await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(20, end - Date.now()))))
+        if ((t.handoff?.at ?? 0) > before) return t.handoff!.text
+      }
+      return undefined
+    } finally {
+      // never typed into a pane that isn't the agent: it is taken back out, not handed to the next agent
+      if (told?.waiting) this.agents.drop(key, told.item.id)
+    }
+  }
+
+  /** the human sees what was handed over: one card with the package the next agent got */
+  private handed(key: string, to: string, text: string) {
+    const card = `handoff:${key.split('/')[0]}:${Date.now()}`
+    this.chats.post(key, { id: card, card: { id: card, handoff: { to, text }, text: `Handoff to ${to}` } })
   }
 
   private troubled(t: TaskRec, e: unknown) {
@@ -1298,6 +1352,26 @@ export class Engine extends Emitter<Events> {
     }
     this.chats.post(this.key(t), { id: q.id, question: q })
     this.save()
+  }
+
+  /**
+   * Its agent's note for whoever takes the task over (shepherdr handoff): kept in the task, replaced in place (never
+   * appended, which would fatten the chat and its own transcript at every refresh), shown as one card, and given to the
+   * next agent. An obvious credential is stripped rather than the note refused, since the note lands in the chat.
+   */
+  handoff(id: string, text: string): { note: HandoffNote; stripped: boolean; cut: boolean } {
+    const t = this.req(id)
+    if (ended(t)) throw new Error(`${t.id} is Done already (${t.closed ? 'nothing to merge' : 'merged'})`)
+    const words = text.replace(/\s+/g, ' ').trim()
+    if (!words) throw new Error('Write the handoff note in words: what is done, what is next, the traps, the files you touched.')
+    const clean = redact(words)
+    const kept = cap(clean.text, HANDOFF_CAPS.note)
+    const by = CLI_NAME[this.agents.record(this.key(t))?.kind ?? t.agent?.kind ?? ''] ?? 'its agent'
+    t.handoff = { text: kept, by, at: Date.now() }
+    this.save()
+    const card = `handoff-note:${t.id}`
+    this.chats.post(this.key(t), { id: card, card: { id: card, note: { text: kept, by }, text: 'Handoff note' } })
+    return { note: t.handoff, stripped: clean.stripped, cut: kept !== clean.text }
   }
 
   /** the agent's own progress (shepherdr status): its line, how far through the task, the minutes left if it said */

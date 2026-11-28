@@ -771,6 +771,39 @@ describe("a task's own progress (shepherdr status)", () => {
   })
 })
 
+describe("a task's handoff note (shepherdr handoff)", () => {
+  test('its agent writes one note, replaced in place, shown as a card; a credential is stripped and a long one cut', async () => {
+    const { t } = await workedTask('handoff')
+    const other = await workedTask('handoff2')
+    const key = `${t.id}/Agent`
+    // only its own task, and only in words
+    expect((await src.cli(['handoff', other.t.id, 'Wrong task'], { chat: key })).out).toContain('only its own task')
+    expect((await src.cli(['handoff', '  '], { chat: key })).code).toBe(1)
+    expect((await src.cli(['handoff', 'hello.txt added; next the tests'], { chat: key })).out).toContain(`Noted: ${t.id}'s handoff note is set (31 characters)`)
+    expect(t.handoff).toMatchObject({ text: 'hello.txt added; next the tests', by: 'Claude Code' })
+    const first = t.handoff!.at
+    // replaced in place: one note, one card (the same id), never appended
+    const r = await src.cli(['handoff', 'tests pass; next the docs'], { chat: key })
+    expect(r.out).toContain(`${t.id}'s handoff note is set`)
+    expect(t.handoff!.text).toBe('tests pass; next the docs')
+    expect(t.handoff!.at).toBeGreaterThanOrEqual(first)
+    const notes = src.chats.chat(key).messages.filter((m) => m.card?.note)
+    expect(notes).toHaveLength(1)
+    expect(notes[0]!.card!.note!.text).toBe('tests pass; next the docs')
+    // an obvious credential never lands in the note, and it says so
+    const secret = await src.cli(['handoff', 'push with ghp_abcdefghijklmnopqrstuvwxyz0123456789 then stop'], { chat: key })
+    expect(secret.out).toContain('looked like a credential')
+    expect(t.handoff!.text).not.toContain('ghp_')
+    // a coordinator names the task; a note too long is cut at the cap, and it says so
+    const long = 'word '.repeat(400)
+    const named = await src.cli(['handoff', t.id, long], {})
+    expect(named.code).toBe(0)
+    expect(named.out).toContain('Cut to 900 characters')
+    expect(t.handoff!.text.length).toBeLessThanOrEqual(900)
+    expect((await src.cli(['handoff', 'No such task'], {})).code).toBe(1)
+  })
+})
+
 describe('attachments', () => {
   const chat = placeId.home()
   /** what the human sent, as the CLI's log has it */

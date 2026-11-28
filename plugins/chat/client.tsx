@@ -1072,6 +1072,29 @@ function Card({ card: c, chat, at, press, keys, className }: { card: UpdateCard;
         </span>
       </div>
     )
+  // its agent's living handoff note: one card, replaced in place as it keeps it current
+  if (c.note)
+    return (
+      <div data-anchor data-handoff-note {...press} {...keys} className={clsx(cardBox, 'flex-col items-stretch gap-1')}>
+        <span className={clsx(cardLine, 'gap-2')}>
+          <RestartIcon className={clsx(ic, 'shrink-0 text-fg2')} />
+          <b className="font-semibold">Handoff note</b>
+          <span className={cardAside}>· {c.note.by}</span>
+        </span>
+        <p className="whitespace-pre-wrap text-[0.875rem] text-fg2">{c.note.text}</p>
+      </div>
+    )
+  // a task handed to another CLI: the package the next agent was given, in full
+  if (c.handoff)
+    return (
+      <div data-anchor data-handoff-card {...press} {...keys} className={clsx(cardBox, 'flex-col items-stretch gap-1')}>
+        <span className={clsx(cardLine, 'gap-2')}>
+          <RestartIcon className={clsx(ic, 'shrink-0 text-fg2')} />
+          <b className="font-semibold">{c.text}</b>
+        </span>
+        <pre className="whitespace-pre-wrap font-sans text-[0.8125rem] leading-relaxed text-fg2">{c.handoff.text}</pre>
+      </div>
+    )
   if (!c.task)
     return (
       <div data-anchor data-mode-card={c.mode} {...press} {...keys} className={clsx(cardBox, className)}>

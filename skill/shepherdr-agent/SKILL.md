@@ -39,9 +39,13 @@ build, check and review the work is your own judgment.
    and start.
 2. **Work** in your worktree and branch only. Say how far along you are, `shepherdr status <id> "<at most 40
    characters>" --done <0-100> --left <5m, 1h20m>`, once you know the size of the work: `--left` is your own time until
-   `ready`, and Shepherdr shows nothing you didn't report. Ask the human only what no experiment can settle: once, a
-   card with your recommended choice first, then end your turn (a turn ended without `ready` and nothing running in
-   the background shows Needs you). Decide the rest yourself and list those decisions in the facts.
+   `ready`, and Shepherdr shows nothing you didn't report. Keep your handoff note current at each milestone, in a few
+   lines, `shepherdr handoff "<what is done, what is next, the traps, the files you touched>"`: it is replaced in place
+   each time, it shows as one card in your chat, and it is what another CLI takes this task over from when the human
+   switches it or its provider dies. Never put a secret's value in it: an obvious credential is stripped. Ask the
+   human only what no experiment can settle: once, a card with your recommended choice first, then end your turn (a
+   turn ended without `ready` and nothing running in the background shows Needs you). Decide the rest yourself and
+   list those decisions in the facts.
 3. **Review**, unless Review is off or the brief says none: fresh eyes that didn't write the change (a subagent, or
    a headless `codex exec`, `claude -p` or `pi -p` as the Reviewer setting suggests). Run a headless one in the
    foreground, its stdin closed (or it waits on stdin forever) and under a timeout, with your shell's timeout at its
