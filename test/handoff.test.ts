@@ -87,9 +87,15 @@ test('an obvious credential is stripped, and plain words are left alone', () => 
   const named = redact('use password=hunter2hunter2 in the config')
   expect(named.stripped).toBe(true)
   expect(named.text).toContain('[redacted]')
+  // a short one, and one after a colon, are credentials too
+  expect(redact('password=hunter2').text).toBe('password=[redacted]')
+  expect(redact('api_key: abc12345').text).toBe('api_key=[redacted]')
+  // plain prose is never mistaken for one: no assignment, no bearer
   const plain = redact('the token bucket is empty and the tests pass')
   expect(plain.stripped).toBe(false)
   expect(plain.text).toBe('the token bucket is empty and the tests pass')
+  const prose = redact('Do not change token validation. Do not change authorization handling either.')
+  expect(prose).toMatchObject({ text: 'Do not change token validation. Do not change authorization handling either.', stripped: false })
 })
 
 test('the human’s first messages are kept, the brief left to its own section, within the cap', () => {

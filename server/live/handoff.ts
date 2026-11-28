@@ -45,11 +45,13 @@ export function cap(text: string, max: number): string {
   return `${head.replace(/\s+\S*$/, '') || head} … (cut)`
 }
 
-/** a credential's known shape, and a named one's value */
+/** a credential's known shape, a named one's value as it is assigned, and a bearer token: a name followed by plain
+ *  prose ("do not change token validation") is left alone, and the value after a name is never assumed to be one */
 const TOKEN =
   /\b(sk-[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{5,})\b/g
 const NAMED =
-  /\b(password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|authorization|bearer)\b(\s*[:=]\s*|\s+)(?!\[redacted\])["']?([^\s"',;]{8,})["']?/gi
+  /\b(password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|authorization)\b\s*[:=]\s*(?!\[redacted\])["']?([^\s"',;]{4,})["']?/gi
+const BEARER = /\bbearer\s+(?!\[redacted\])[A-Za-z0-9._~+/-]{8,}=*/gi
 
 /** an obvious credential taken out of words meant for the chat, and whether one was */
 export function redact(text: string): { text: string; stripped: boolean } {
@@ -59,9 +61,13 @@ export function redact(text: string): { text: string; stripped: boolean } {
       stripped = true
       return '[redacted]'
     })
-    .replace(NAMED, (all, name: string, sep: string) => {
+    .replace(NAMED, (all, name: string) => {
       stripped = true
-      return `${name}${sep}[redacted]`
+      return `${name}=[redacted]`
+    })
+    .replace(BEARER, () => {
+      stripped = true
+      return 'Bearer [redacted]'
     })
   return { text: out, stripped }
 }

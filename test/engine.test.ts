@@ -566,6 +566,23 @@ describe('restarting a task agent', () => {
     expect(w.sent.filter((x) => x.key === key && x.text.includes('shepherdr handoff'))).toHaveLength(1)
   })
 
+  test('a turn that will not stop does not hold the switch back: another CLI takes over regardless', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const { t, key } = await started(w, repo(), 'restart-stuck')
+    w.agentIs(key, 'working')
+    w.agents.stopTurn = async () => {
+      throw new Error('It is still working after an interrupt: try again in a moment.')
+    }
+    await w.engine.restart(t.id, { kind: 'codex' })
+    const s = w.started.filter((x) => x.key === key)
+    expect(s).toHaveLength(2)
+    expect(w.records[key]!.kind).toBe('codex')
+    // its own CLI keeps the old rule: a turn that will not stop holds a resume back
+    w.agentIs(key, 'working')
+    await expect(w.engine.restart(t.id, { kind: 'codex' })).rejects.toThrow('still working')
+  })
+
   test('a note written mid-turn does not cut that turn short: the switch gives the turn the rest of the bound', async () => {
     const w = world()
     w.engine.installed = () => true

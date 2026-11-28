@@ -1203,9 +1203,10 @@ export class Engine extends Emitter<Events> {
       const final = from === h.kind ? undefined : await this.finalNote(t, key, name(h.kind))
       let told = ''
       const first = async () => {
-        // what it is told, read once its turn has stopped: what it did meanwhile counts
-        await this.agents.stopTurn(key)
-        if (from === h.kind) return hidden(resumedLine(words), 'restart')
+        // what it is told, read once its turn has stopped: what it did meanwhile counts. A turn that will not stop
+        // holds a resume back (its own session waits for it), never this switch: another CLI takes over regardless
+        if (from === h.kind) await this.agents.stopTurn(key)
+        else await this.agents.stopTurn(key).catch(() => undefined)
         told = restartLine({ from: name(from), to: words, handoff: { ...(await this.soFar(t, key)), ...(final ? { final } : {}) } })
         return hidden(told, 'restart')
       }
@@ -1318,7 +1319,7 @@ export class Engine extends Emitter<Events> {
         await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(20, end - Date.now()))))
         // the note, then its turn over: a mid-turn agent is given the rest of the bound to finish, never cut short for
         // the note alone (the switch's own stopTurn does that, as it always did)
-        if (!wrote && (t.handoff?.at ?? 0) > before) wrote = t.handoff!.text
+        if ((t.handoff?.at ?? 0) > before) wrote = t.handoff!.text
         if (wrote && this.agents.status(key) !== 'working') return wrote
       }
       return wrote
