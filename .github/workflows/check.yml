@@ -1,7 +1,7 @@
-# The whole check (types, every test with the browser ones, the build) on GitHub's runners, on every push to main (a
-# merge): the full suite runs here, not on the machine the agents work on (AGENTS.md). Pull requests get no run: a task
-# merges once its own quick checks pass, and Shepherdr tells the coordinator when main goes red. A branch can still be
-# checked by hand: gh workflow run check.yml --ref <branch>.
+# The whole check (types, every test with the browser ones, the build) on GitHub's runners: on every push to main (a
+# merge) and on every pull request, so a change is shown green before it lands rather than after. The full suite runs
+# here, not on the machine the agents work on (AGENTS.md). A branch can still be checked by hand:
+# gh workflow run check.yml --ref <branch>.
 #
 # Lean, as GitHub bills each job by the minute, rounded up: the types and the build share one job, and the tests run
 # split over three runners (bun test --shard, balanced by each file's time on the last run), which also note which
@@ -14,6 +14,7 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
+  pull_request:
   workflow_dispatch:
 
 concurrency:
