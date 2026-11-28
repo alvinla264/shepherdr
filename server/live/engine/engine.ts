@@ -1203,10 +1203,14 @@ export class Engine extends Emitter<Events> {
       const final = from === h.kind ? undefined : await this.finalNote(t, key, name(h.kind))
       let told = ''
       const first = async () => {
-        // what it is told, read once its turn has stopped: what it did meanwhile counts. A turn that will not stop
-        // holds a resume back (its own session waits for it), never this switch: another CLI takes over regardless
-        if (from === h.kind) await this.agents.stopTurn(key)
-        else await this.agents.stopTurn(key).catch(() => undefined)
+        // what it is told, read once its turn has stopped: what it did meanwhile counts
+        if (from === h.kind) {
+          await this.agents.stopTurn(key)
+          return hidden(resumedLine(words), 'restart')
+        }
+        // another CLI takes over: a turn that will not stop holds a resume back (its own session waits for it), never
+        // this switch, so it goes on regardless
+        await this.agents.stopTurn(key).catch(() => undefined)
         told = restartLine({ from: name(from), to: words, handoff: { ...(await this.soFar(t, key)), ...(final ? { final } : {}) } })
         return hidden(told, 'restart')
       }
