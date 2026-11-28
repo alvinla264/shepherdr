@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { BODY_MAX, clip, lastReply, openCards, taskAlert, TITLE_MAX } from '../../shared/alerts.ts'
 import { deleteSection, moveSpace, newSection, PINNED, renameSection, sectionProblem, sortPlaces } from '../../shared/order.ts'
-import { asEmoji, doneNewestFirst, modeCard, NAME_MAX, nameProblem, slugify, STATUS_MAX, type Action, type ActivityAnswer, type ActivityAsk, type AddSpace, type Alert, type Artifact, type CardAsk, type Chat, type RestartInfo, type Question, type Folders, type Machine, type Place, type Section, type Snapshot, type Task, type TaskStatus, type UpdateCard, type WorktreeAsk } from '../../shared/types.ts'
+import { asEmoji, doneNewestFirst, modeCard, NAME_MAX, nameProblem, slugify, STATUS_MAX, type Action, type ActivityAnswer, type ActivityAsk, type AddSpace, type Alert, type Artifact, type CardAsk, type Chat, type RestartInfo, type Question, type Folders, type Machine, type Place, type PortServer, type Section, type Snapshot, type Task, type TaskStatus, type UpdateCard, type WorktreeAsk } from '../../shared/types.ts'
 import { Emitter, type Overview, type Source, type SourceEvents } from '../source.ts'
 import { HOME, readJson, writeJson } from '../store.ts'
 import { ROOT } from '../root.ts'
@@ -51,6 +51,7 @@ import { CATALOG, CLI_NAME, CLIS, kindOf, refuse, setForTask, repositorySection,
 import { startVoice } from './voice.ts'
 import { SECRET_NAME, secretPages, Vault } from './secrets.ts'
 import { diffFiles, diffPatch, listFiles, pullRequest, readFile } from './worktree.ts'
+import { readPorts } from './ports.ts'
 import { RequestedNewsMailbox } from './requested-news.ts'
 import { Unread } from './unread.ts'
 import { Monitor, meters, procLines, summary, topProcs, type HealthEvent, type Kind } from './health.ts'
@@ -837,6 +838,24 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
     for (const [k, x] of this.prs) if (Date.now() - x.at > 300_000) this.prs.delete(k)
     this.prs.set(t.id, { at: Date.now(), v })
     return v
+  }
+
+  /* ---------- the localhost servers a task's machine listens on, for its browser panel ---------- */
+
+  /**
+   * A task's own machine answers: its loopback listeners, read-only from /proc (server/live/ports.ts). A task on another
+   * machine asks that machine, over the link it already has. Nothing is kept between calls.
+   */
+  async ports(task: string): Promise<PortServer[]> {
+    const peer = this.peers?.owner(task)
+    if (peer) {
+      if (!peer.reachable) throw new Error(`Can't reach ${peer.rec.machine} right now.`)
+      const b = await this.onPeer<{ ports: PortServer[] }>(peer, `/api/ports?${new URLSearchParams({ task })}`)
+      return b.ports ?? []
+    }
+    const t = this.engine.tasks.find((x) => x.id === task && this.places.space(x.project))
+    if (!t) throw new Error(`No task ${task}.`)
+    return readPorts({ worktree: t.worktree })
   }
 
   /* ---------- adding spaces ---------- */

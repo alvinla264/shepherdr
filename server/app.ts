@@ -192,6 +192,12 @@ export function startApp({ source, dist, push, port, host = '127.0.0.1', updates
           const ask = { task: q.get('task') ?? '', what, path: q.get('path') ?? '' } as WorktreeAsk
           return json(await source.worktree(ask))
         }
+        if (path === '/api/ports') {
+          if (!source.ports) return json({ error: 'Not possible here.' }, 404)
+          const task = q.get('task') ?? ''
+          if (!task) return json({ error: 'Ask for a task.' }, 400)
+          return json({ ports: await source.ports(task) })
+        }
         if (path === '/api/activity') {
           if (!source.activity) return json({ error: 'Not possible here.' }, 404)
           const what = q.get('what')
@@ -368,7 +374,7 @@ export function sameSite(req: Request, path: string, host = req.headers.get('hos
   if (writes && origin !== null && req.headers.get('x-shepherdr') !== '1') return false
   // fetch metadata: a cross-site request is never let through, Origin or not
   const site = req.headers.get('sec-fetch-site')
-  if (site === 'cross-site' && (writes || path === '/api/ws' || path === '/api/voice' || path === '/api/browser' || path === '/api/file' || path === '/api/folders' || path === '/api/worktree' || path === '/api/activity' || path === '/api/chat')) return false
+  if (site === 'cross-site' && (writes || path === '/api/ws' || path === '/api/voice' || path === '/api/browser' || path === '/api/file' || path === '/api/folders' || path === '/api/worktree' || path === '/api/ports' || path === '/api/activity' || path === '/api/chat')) return false
   return true
 }
 

@@ -6,7 +6,7 @@ import { apart, asEmoji, artifactQuote, cardMessage, modeCard, nameProblem, slug
 import { Emitter, type Source, type SourceEvents } from '../source.ts'
 import * as D from './data.ts'
 import { ARTIFACT_DATA, ARTIFACT_HTML, thumb } from './artifacts.ts'
-import { DEMO_PRS, demoWorktree } from './code.ts'
+import { DEMO_PORTS, DEMO_PRS, demoWorktree } from './code.ts'
 import { demoActivity } from './activity.ts'
 import { settingsBlock } from '../live/prompts.ts'
 import { CLI_NAME, repositorySection, defaultOf, kindOf } from '../live/settings.ts'
@@ -157,6 +157,11 @@ export class DemoWorld extends Emitter<SourceEvents> implements Source {
 
   async worktree(ask: WorktreeAsk) {
     return demoWorktree(ask, this.tasks.some((t) => t.id === ask.task && t.agent))
+  }
+
+  async ports(task: string) {
+    if (!this.tasks.some((t) => t.id === task && t.agent)) throw new Error(`No task ${task}.`)
+    return DEMO_PORTS
   }
 
   async folders(machine: string, path: string): Promise<Folders> {

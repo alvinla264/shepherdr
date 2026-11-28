@@ -59,6 +59,10 @@ class Stub extends Emitter<SourceEvents> {
     if (ask.path?.includes('..')) throw new Error('No such file.')
     return { asked: ask }
   }
+  async ports(task: string) {
+    if (task !== 'GTM-1') throw new Error(`No task ${task}.`)
+    return [{ port: 5173, url: 'http://127.0.0.1:5173', process: 'vite', cwd: '/home/u/dev/gtm', mine: true }]
+  }
   async addSpace(req: unknown) {
     acted.push(req)
     return { place: 'p:h:x' }
@@ -300,6 +304,17 @@ describe("a task's worktree", () => {
     expect((await fetch(`${base}/api/worktree?task=GTM-1&what=rm`)).status).toBe(400)
     const bad = await fetch(`${base}/api/worktree?task=GTM-1&what=file&path=../x`)
     expect(((await bad.json()) as { error: string }).error).toBe('No such file.')
+  })
+})
+
+describe("a task's localhost servers", () => {
+  test("read by the app's own page, never by another website, and only for a named task", async () => {
+    const r = await fetch(`${base}/api/ports?task=GTM-1`, { headers: { 'sec-fetch-site': 'same-origin' } })
+    expect(await r.json()).toEqual({ ports: [{ port: 5173, url: 'http://127.0.0.1:5173', process: 'vite', cwd: '/home/u/dev/gtm', mine: true }] })
+    expect((await fetch(`${base}/api/ports?task=GTM-1`, { headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403)
+    expect((await fetch(`${base}/api/ports?task=GTM-1`, { headers: { origin: 'https://evil.example' } })).status).toBe(403)
+    expect((await fetch(`${base}/api/ports`)).status).toBe(400)
+    expect(((await (await fetch(`${base}/api/ports?task=nope`)).json()) as { error: string }).error).toBe('No task nope.')
   })
 })
 
