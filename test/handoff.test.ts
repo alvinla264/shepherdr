@@ -64,6 +64,21 @@ test('each part is capped by size, so a whole package stays a few thousand chara
   expect(HANDOFF_CAPS.note).toBeLessThan(PACKAGE_MAX)
 })
 
+test('a credential is stripped from every part of the package, not just the note: the card is in the chat', () => {
+  const text = handoffText({
+    brief: 'Deploy with API_KEY=sk-abcdefghijklmnop1234 from the box.',
+    human: 'and token: ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+    note: { text: 'password=hunter2hunter2', by: 'Codex', at: 1 },
+    commits: 'a1 Use AKIAIOSFODNN7EXAMPLE in the docs',
+    status: 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
+  })
+  for (const secret of ['sk-abcdefghijklmnop1234', 'ghp_abcdefghijklmnopqrstuvwxyz0123456789', 'hunter2hunter2', 'AKIAIOSFODNN7EXAMPLE', 'eyJhbGciOiJIUzI1NiJ9'])
+    expect(text).not.toContain(secret)
+  expect(text).toContain('[redacted]')
+  // what it cannot catch: a value only a reader would recognize as one
+  expect(redact('the password we agreed on is written on the whiteboard')).toMatchObject({ text: 'the password we agreed on is written on the whiteboard', stripped: false })
+})
+
 test('an obvious credential is stripped, and plain words are left alone', () => {
   const key = redact('set GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789 while you work')
   expect(key.stripped).toBe(true)

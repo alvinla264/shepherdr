@@ -85,25 +85,27 @@ export function statusFacts(t: { report?: { msg: string; progress: number; left?
   return lines.join('\n')
 }
 
-/** the package in words, labelled so the next agent can tell a fact from a claim */
+/** the package in words, labelled so the next agent can tell a fact from a claim; every part is stripped of an
+ *  obvious credential, since the same words land in the card the human reads */
 export function handoffText(h: Handoff): string {
+  const clean = (text: string, max: number) => cap(redact(text.trim()).text, max)
   const sections: string[] = []
-  if (h.brief?.trim()) sections.push(`The brief as given:\n\n${cap(h.brief.trim(), HANDOFF_CAPS.brief)}`)
-  if (h.human?.trim()) sections.push(`The human said:\n\n${cap(h.human.trim(), HANDOFF_CAPS.human)}`)
+  if (h.brief?.trim()) sections.push(`The brief as given:\n\n${clean(h.brief, HANDOFF_CAPS.brief)}`)
+  if (h.human?.trim()) sections.push(`The human said:\n\n${clean(h.human, HANDOFF_CAPS.human)}`)
   // the note written at the switch is the living note's latest version, replaced in place: said once, and said so
   const told = redact(h.final?.trim() ?? '').text
   const final = told && told !== h.note?.text.trim() ? told : ''
   const atSwitch = !!told && told === h.note?.text.trim()
   if (h.note?.text.trim())
     sections.push(
-      `The task's handoff note (written by ${h.note.by}, ${atSwitch ? 'last at the switch' : 'kept current while it worked'}):\n\n${cap(redact(h.note.text.trim()).text, HANDOFF_CAPS.note)}`,
+      `The task's handoff note (written by ${h.note.by}, ${atSwitch ? 'last at the switch' : 'kept current while it worked'}):\n\n${clean(h.note.text, HANDOFF_CAPS.note)}`,
     )
   if (final) sections.push(`The agent that ran it before you wrote:\n\n${cap(final, HANDOFF_CAPS.final)}`)
   const facts = [
-    h.commits === undefined ? '' : `Commits on the branch so far:\n${cap(h.commits || 'none', HANDOFF_CAPS.commits)}`,
-    h.changes === undefined ? '' : `Uncommitted changes (git status --short):\n${cap(h.changes || 'none', HANDOFF_CAPS.changes)}`,
-    h.diffstat === undefined ? '' : `What changed on the branch (git diff --stat):\n${cap(h.diffstat || 'none', HANDOFF_CAPS.diffstat)}`,
-    h.status === undefined ? '' : `The agent before you (shepherdr status):\n${cap(h.status || 'nothing reported', HANDOFF_CAPS.status)}`,
+    h.commits === undefined ? '' : `Commits on the branch so far:\n${clean(h.commits || 'none', HANDOFF_CAPS.commits)}`,
+    h.changes === undefined ? '' : `Uncommitted changes (git status --short):\n${clean(h.changes || 'none', HANDOFF_CAPS.changes)}`,
+    h.diffstat === undefined ? '' : `What changed on the branch (git diff --stat):\n${clean(h.diffstat || 'none', HANDOFF_CAPS.diffstat)}`,
+    h.status === undefined ? '' : `The agent before you (shepherdr status):\n${clean(h.status || 'nothing reported', HANDOFF_CAPS.status)}`,
   ].filter(Boolean)
   if (facts.length) sections.push(`Facts:\n\n${facts.join('\n\n')}`)
   return sections.join('\n\n')

@@ -565,6 +565,24 @@ describe('restarting a task agent', () => {
     expect(w.sent.filter((x) => x.key === key && x.text.includes('shepherdr handoff'))).toHaveLength(1)
   })
 
+  test('a note written mid-turn does not cut that turn short: the switch gives the turn the rest of the bound', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const { t, key } = await started(w, repo(), 'restart-midturn')
+    w.engine.handoffWait = 4000
+    w.agentIs(key, 'working')
+    const p = w.engine.restart(t.id, { kind: 'codex' })
+    await until(() => w.sent.some((x) => x.key === key && x.text.includes('shepherdr handoff')))
+    w.engine.handoff(t.id, 'note written mid-turn')
+    await Bun.sleep(300)
+    // its note is in, but its turn still runs: the switch waits for the turn, it does not interrupt it for this
+    expect(w.started.filter((x) => x.key === key)).toHaveLength(1)
+    w.agentIs(key, 'idle')
+    await p
+    expect(w.stopped).toEqual([])
+    expect(w.started.filter((x) => x.key === key)).toHaveLength(2)
+  })
+
   test('an agent that does not answer is not waited on forever: the switch goes on', async () => {
     const w = world()
     w.engine.installed = () => true

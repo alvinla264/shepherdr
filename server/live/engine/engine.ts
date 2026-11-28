@@ -1313,11 +1313,15 @@ export class Engine extends Emitter<Events> {
     const asked = Date.now()
     const told = await this.agents.send(key, hidden(finalNoteAsk(to), 'handoff')).catch(() => undefined)
     try {
+      let wrote: string | undefined
       for (const end = asked + this.handoffWait; Date.now() < end; ) {
         await new Promise((r) => setTimeout(r, Math.min(1000, Math.max(20, end - Date.now()))))
-        if ((t.handoff?.at ?? 0) > before) return t.handoff!.text
+        // the note, then its turn over: a mid-turn agent is given the rest of the bound to finish, never cut short for
+        // the note alone (the switch's own stopTurn does that, as it always did)
+        if (!wrote && (t.handoff?.at ?? 0) > before) wrote = t.handoff!.text
+        if (wrote && this.agents.status(key) !== 'working') return wrote
       }
-      return undefined
+      return wrote
     } finally {
       // never typed into a pane that isn't the agent: it is taken back out, not handed to the next agent
       if (told?.waiting) this.agents.drop(key, told.item.id)
