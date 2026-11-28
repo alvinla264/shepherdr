@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { sh, repo, world, until, started, placeId, settingsBlock, writeJson, fakeHerdr } from './engine-world.ts'
+import { sh, repo, world, until, started, placeId, settingsBlock, taskFirst, writeJson, fakeHerdr } from './engine-world.ts'
 const { fitStatus, reportOf, STALL_QUIET } = await import('../server/live/engine/engine.ts')
 
 describe('a task is its brief and one agent', () => {
@@ -449,7 +449,8 @@ describe('a turn the provider cut off', () => {
     sh('echo hi > hello.txt && git add -A && git commit -qm "Add hello.txt"', t.worktree!)
     writeFileSync(join(t.worktree!, 'more.txt'), 'more\n')
     w.chat.messages = [
-      { who: 'you', text: 'Say hello\n\nAdd hello.txt. Merge when done.' },
+      // the brief as its agent got it: the human's first message, left out of "The human said:" (it has its own part)
+      { who: 'you', text: taskFirst(t) },
       { who: 'you', text: 'Use blue for the greeting' },
       { who: 'agent', text: 'Added hello.txt; next the tests.' },
       { who: 'agent', card: {}, text: 'SHE-1 needs you' },
@@ -510,7 +511,7 @@ describe('restarting a task agent', () => {
     sh('echo hi > hello.txt && git add -A && git commit -qm "Add hello.txt"', t.worktree!)
     writeFileSync(join(t.worktree!, 'more.txt'), 'more\n')
     w.chat.messages = [
-      { who: 'you', text: 'Say hello\n\nAdd hello.txt. Merge when done.' },
+      { who: 'you', text: taskFirst(t) },
       { who: 'you', text: 'Use blue for the greeting' },
       { who: 'agent', text: 'Added hello.txt; next the tests.' },
     ]
@@ -521,7 +522,7 @@ describe('restarting a task agent', () => {
     expect(s[1]).toMatchObject({ kind: 'codex', cwd: t.worktree })
     expect(s[1].first).toContain('The brief as given:\n\nSay hello\n\nAdd hello.txt. Merge when done.')
     expect(s[1].first).toContain('Claude Code ran it until now')
-    expect(s[1].first).toContain('The human said:')
+    expect(s[1].first).toContain('The human said:\n\nUse blue for the greeting')
     expect(s[1].first).toContain('?? more.txt')
     expect(w.stopped).toEqual([])
     expect(w.posted.find((p) => p.card?.handoff)?.card?.handoff).toMatchObject({ to: 'Codex' })
