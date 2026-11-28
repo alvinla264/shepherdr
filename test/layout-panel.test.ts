@@ -424,6 +424,47 @@ describe.skipIf(!browser)("a task's side panel", () => {
     await page.close()
   }, 30_000)
 
+  test('the Browser panel lists the machine’s localhost servers, and a press opens one', async () => {
+    const fake = fakeAgentBrowser()
+    const was = world.browsers
+    const b = new Browsers({ bin: fake.bin, env: (t) => ({ ...browserEnv(t), AGENT_BROWSER_NAMESPACE: 'layout-test', ...fake.env }), host: 'vm-str', user: () => 'Elias', working: () => false, tell: () => undefined })
+    world.browsers = b
+    const until = async (f: () => boolean) => {
+      for (let i = 0; !f(); i++) {
+        if (i > 200) throw new Error('timed out')
+        await new Promise((r) => setTimeout(r, 25))
+      }
+    }
+    try {
+      await until(() => b.status().ready)
+      const page = await browser!.newPage({ viewport: { width: 1600, height: 900 } })
+      await page.goto(task('GTM-15'))
+      await page.getByRole('button', { name: 'Show task panel' }).click()
+      await page.getByRole('tab', { name: 'Browser' }).click()
+      await page.getByRole('button', { name: 'Servers on this task’s machine' }).click()
+      const list = page.locator('section[aria-label="Local servers"]')
+      const port = list.getByRole('button', { name: 'Open http://127.0.0.1:5173 (vite)' })
+      await port.waitFor()
+      // each row: its port, the process, and the task's own worktree marked instead of a path
+      expect(await list.getByRole('listitem').allTextContents()).toEqual([':3000bunThis task', ':5173vitegtm/docs', ':8080'])
+      expect(await list.getByRole('button', { name: /3000/ }).textContent()).toContain('This task')
+      // a press opens it: the page navigates to the loopback address, and that is you driving
+      await port.click()
+      await until(() => fake.cdpCalls.some((c) => c.method === 'Page.navigate' && c.params.url === 'http://127.0.0.1:5173'))
+      await page.getByText('You’re driving').waitFor()
+      expect(await list.count()).toBe(0)
+      // and the list can be read again
+      await page.getByRole('button', { name: 'Servers on this task’s machine' }).click()
+      await list.getByRole('button', { name: 'Refresh the server list' }).click()
+      await port.waitFor()
+      await page.close()
+    } finally {
+      await b.close('GTM-15')
+      world.browsers = was
+      fake.stop()
+    }
+  }, 30_000)
+
   test('the Browser panel: watch the agent, take over and click, mark it up with a pin, send the note into the chat', async () => {
     const fake = fakeAgentBrowser()
     const was = world.browsers

@@ -1,5 +1,5 @@
 // The demo's made-up worktrees, for a task's side panel: a few files, what each task changed, and GTM-15's pull request.
-import type { Diff, DiffFile, FileText, Patch, PullRequest, WorktreeAsk } from '../../shared/types.ts'
+import type { Diff, DiffFile, FileText, Patch, PortServer, PullRequest, WorktreeAsk } from '../../shared/types.ts'
 
 const FILES: Record<string, string> = {
   'README.md': '# gtm\n\nGo-to-market workflows: webhooks in, enrichment, outbound.\n\n```sh\nbun install\nbun test\n```\n',
@@ -97,3 +97,11 @@ export function demoWorktree(ask: WorktreeAsk, has: boolean): unknown {
 
 /** the demo tasks with a pull request open */
 export const DEMO_PRS = Object.fromEntries(Object.entries(PRS).map(([id, p]) => [id, { number: p.number, url: p.url }]))
+
+/** the demo's made-up localhost servers: the task's own dev server, a preview beside the worktree, and one whose
+ *  process could not be read (a plain port) */
+export const DEMO_PORTS: PortServer[] = [
+  { port: 3000, url: 'http://127.0.0.1:3000', process: 'bun', cwd: '~/dev/gtm', mine: true },
+  { port: 5173, url: 'http://127.0.0.1:5173', process: 'vite', cwd: '~/dev/gtm/docs' },
+  { port: 8080, url: 'http://127.0.0.1:8080' },
+]

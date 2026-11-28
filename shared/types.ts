@@ -850,6 +850,19 @@ export interface PullRequest {
 /** what the side panel asks of a task's worktree */
 export type WorktreeAsk = { task: string } & ({ what: 'files' } | { what: 'file'; path: string } | { what: 'diff' } | { what: 'patch'; path: string } | { what: 'pr' })
 
+/** a localhost server the Browser panel can open: a listener of this user's on the task's machine, read from /proc */
+export interface PortServer {
+  port: number
+  /** what the panel's browser opens: http://127.0.0.1:<port>, or http://[::1]:<port> for a socket bound only there */
+  url: string
+  /** what opened it, as the kernel names the process (bun, node), when it can be read */
+  process?: string
+  /** the directory it runs in, when it can be read */
+  cwd?: string
+  /** its directory is inside the task's own worktree */
+  mine?: boolean
+}
+
 export interface Snapshot {
   name: string
   host: string

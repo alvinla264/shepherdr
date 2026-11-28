@@ -14,7 +14,12 @@
   agent command and no one watching it in the panel closes too, sign-ins kept: Settings → Browser → Close idle browser
   after (`browser.idleClose`: 10 min, or off; per machine or space). The agent's next command or opening the panel
   starts it again. Its pages see `prefers-reduced-motion: reduce` (Chrome draws them in software, so an animation
-  costs a core); an agent whose page must move turns that off with `set media no-preference`. agent-browser is
+  costs a core); an agent whose page must move turns that off with `set media no-preference`. **Servers** (the server
+  icon beside the address) lists what that machine listens on: this user's loopback ports, each with its process and,
+  when it can be read, its directory — the task's own worktree marked *This task*. A press takes over if the agent has
+  the browser and opens `http://127.0.0.1:<port>` (`[::1]` when that is where it listens); Refresh reads the machine again. Nothing is kept between reads, no
+  address other than loopback is shown (the server reads `/proc/net/tcp{,6}` and the pids' directories, never their
+  command lines), and nothing on the machine is changed. agent-browser is
   pinned in package.json (`bin/agent-browser` runs that version, for agents too: they are told its full path, since a
   shell's start-up files can put another version first on the PATH, and two versions on one session keep restarting
   its daemon); it needs Chrome on the main machine once (`bin/agent-browser install`); other machines get it with

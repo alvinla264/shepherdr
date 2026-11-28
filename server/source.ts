@@ -1,6 +1,6 @@
 // A source fills the view model and carries out actions. The live source reads herdr and the CLIs' logs; the demo
 // source holds the prototype's fictional world, for side-by-side review and tests.
-import type { Action, ActivityAnswer, ActivityAsk, AddSpace, Alert, Chat, Folders, Snapshot, TermScreen, WorktreeAsk } from '../shared/types.ts'
+import type { Action, ActivityAnswer, ActivityAsk, AddSpace, Alert, Chat, Folders, PortServer, Snapshot, TermScreen, WorktreeAsk } from '../shared/types.ts'
 import type { WebConfig } from './web.ts'
 
 export type SourceEvents = {
@@ -58,6 +58,9 @@ export interface Source extends Emitter<SourceEvents> {
   /** a task's worktree, read only, for its side panel: its files, a file, its diff against its base, a file's diff,
    *  its pull request. Never anything outside that worktree. */
   worktree?(ask: WorktreeAsk): Promise<unknown>
+  /** this user's loopback listeners on a task's machine, for the Browser panel's Servers list: read only, and never
+   *  anything a same-machine browser cannot open */
+  ports?(task: string): Promise<PortServer[]>
   /** a chat's activity: a turn's steps, a step's raw output, a background job's steps or output */
   activity?(ask: ActivityAsk): Promise<ActivityAnswer>
   /** a voice call's audio bridge (live) */

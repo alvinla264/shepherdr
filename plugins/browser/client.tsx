@@ -4,9 +4,9 @@
 import clsx from 'clsx'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { act, definePlugin, useUI } from '@client/kernel.ts'
-import { FitIcon, Ghost, GlobeIcon, ic, IconButton, PageBackIcon, PageForwardIcon, MarkUpIcon, Primary, ReloadIcon, Small, UnfitIcon, XIcon } from '@client/ui.tsx'
+import { FitIcon, Ghost, GlobeIcon, ic, IconButton, PageBackIcon, PageForwardIcon, MarkUpIcon, Primary, ReloadIcon, ServerIcon, Small, Tag, UnfitIcon, XIcon } from '@client/ui.tsx'
 import { shortUrl, type BrowserDown, type BrowserNote, type BrowserPick, type BrowserUp, type FrameMeta } from '@shared/browser.ts'
-import type { Task } from '@shared/types.ts'
+import type { PortServer, Task } from '@shared/types.ts'
 import { fit, keyEvent, modifiers, pinAt, shotRect, toPage, toPanel, type Rect, type Size } from './input.ts'
 
 type State = Extract<BrowserDown, { type: 'state' }>
@@ -238,6 +238,9 @@ function useCanvas() {
   return { canvas, stage, meta, page, rect, box, onFrame, crop, hasFrame: () => !!bitmap.current }
 }
 
+/** a directory as a phone reads it: its last two names (the whole path is the row's title) */
+const shortPath = (p: string) => p.split('/').filter(Boolean).slice(-2).join('/') || p
+
 export function BrowserView({ task, chatKey }: { task: Task; chatKey: string }) {
   const ui = useUI()
   const phone = ui.device === 'phone'
@@ -276,6 +279,41 @@ export function BrowserView({ task, chatKey }: { task: Task; chatKey: string }) 
   const you = st?.driver === 'you'
   const busy = !you && st?.agentAgo !== undefined && st.agentAgo < BUSY_MS
   const fitted = !!st && (st.viewport.w !== DESKTOP.w || st.viewport.h !== DESKTOP.h)
+
+  /* ---------- the localhost servers on this task's machine ---------- */
+
+  const [servers, setServers] = useState<PortServer[] | null>(null)
+  const [serversShown, setServersShown] = useState(false)
+  const [serversError, setServersError] = useState<string | null>(null)
+  const [serversBusy, setServersBusy] = useState(false)
+  // the panel's own refresh is the only cache: every open or press of Refresh reads the machine again
+  const loadServers = useCallback(async () => {
+    setServersBusy(true)
+    try {
+      const r = await fetch(`api/ports?task=${encodeURIComponent(task.id)}`, { cache: 'no-store' })
+      const b = (await r.json().catch(() => ({}))) as { ports?: PortServer[]; error?: string }
+      if (!r.ok) throw new Error(b.error ?? `It said ${r.status}.`)
+      setServers(b.ports ?? [])
+      setServersError(null)
+    } catch (e) {
+      const why = e instanceof Error ? e.message : ''
+      setServersError(why && why !== 'Failed to fetch' ? why : "Can't reach Shepherdr right now.")
+    } finally {
+      setServersBusy(false)
+    }
+  }, [task.id])
+  /** a press opens it: that is you driving, so the agent's browser is taken over first when it has it */
+  const openServer = (s: PortServer) => {
+    if (!you) link.send({ type: 'take' })
+    link.send({ type: 'go', url: s.url })
+    setServersShown(false)
+  }
+
+  const toggleServers = () => {
+    const next = !serversShown
+    setServersShown(next)
+    if (next) loadServers()
+  }
 
   // "busy" fades on its own once the agent stops
   const [, tick] = useState(0)
@@ -521,10 +559,25 @@ export function BrowserView({ task, chatKey }: { task: Task; chatKey: string }) 
           }}
           className="h-7 min-w-0 flex-1 truncate rounded-full bg-bubble px-3 text-[0.8125rem] text-fg outline-none placeholder:text-fg3 read-only:text-fg2 focus:shadow-box-focus phone:h-10 phone:text-[1rem]"
         />
+        <IconButton label={serversShown ? 'Hide servers' : 'Servers on this task’s machine'} pressed={serversShown} onClick={toggleServers}>
+          <ServerIcon className={ic} />
+        </IconButton>
         <IconButton label={annotate ? 'Done marking up' : 'Mark up: point at things on the page to leave notes'} pressed={annotate} onClick={toggleAnnotate}>
           <MarkUpIcon />
         </IconButton>
       </div>
+
+      {/* the localhost servers on the task's machine: a press opens one */}
+      {serversShown ? (
+        <Servers
+          servers={servers}
+          error={serversError}
+          busy={serversBusy}
+          onRefresh={loadServers}
+          onOpen={openServer}
+          onClose={() => setServersShown(false)}
+        />
+      ) : null}
 
       {/* who drives */}
       <div className={clsx('flex min-h-9 shrink-0 items-center gap-2 pr-1.5 pl-3 text-[0.8125rem] phone:min-h-11 phone:text-[0.875rem]', you ? 'bg-accent/8' : 'bg-well')} aria-live="polite">
@@ -634,6 +687,54 @@ export function BrowserView({ task, chatKey }: { task: Task; chatKey: string }) 
         />
       ) : null}
     </div>
+  )
+}
+
+/** the localhost servers the task's machine listens on: a press opens one in the panel's browser */
+function Servers({ servers, error, busy, onRefresh, onOpen, onClose }: { servers: PortServer[] | null; error: string | null; busy: boolean; onRefresh: () => void; onOpen: (s: PortServer) => void; onClose: () => void }) {
+  return (
+    <section aria-label="Local servers" className="flex max-h-[45%] shrink-0 flex-col border-b border-line">
+      <div className="flex min-h-9 shrink-0 items-center gap-2 pr-1 pl-3">
+        <Small className="min-w-0 flex-1 truncate font-medium text-fg2">Servers on this task’s machine</Small>
+        <IconButton label="Refresh the server list" disabled={busy} onClick={onRefresh}>
+          <ReloadIcon className={ic} />
+        </IconButton>
+        <IconButton label="Close the server list" onClick={onClose}>
+          <XIcon className={ic} />
+        </IconButton>
+      </div>
+      <div className="min-h-0 overflow-y-auto pb-1.5">
+        {error ? (
+          <Small className="px-3 py-1 text-need-fg">{error}</Small>
+        ) : servers === null ? (
+          <Small className="px-3 py-1 text-fg3">Looking…</Small>
+        ) : !servers.length ? (
+          <Small className="px-3 py-1 text-fg3">No local servers running.</Small>
+        ) : (
+          <ul role="list" className="flex flex-col">
+            {servers.map((s) => (
+              <li key={s.port}>
+                <button
+                  type="button"
+                  onClick={() => onOpen(s)}
+                  title={s.cwd}
+                  aria-label={`Open ${s.url}${s.process ? ` (${s.process})` : ''}`}
+                  className="hit flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-hover focus-visible:bg-sel focus-visible:outline-none"
+                >
+                  <span className="shrink-0 font-mono text-[0.8125rem] text-fg tabular-nums phone:text-[0.9375rem]">:{s.port}</span>
+                  {s.process ? <span className="shrink-0 text-[0.8125rem] text-fg2 phone:text-[0.9375rem]">{s.process}</span> : null}
+                  {s.mine ? (
+                    <Tag>This task</Tag>
+                  ) : s.cwd ? (
+                    <span className="min-w-0 flex-1 truncate text-right text-[0.75rem] text-fg3 phone:text-[0.8125rem]">{shortPath(s.cwd)}</span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   )
 }
 
