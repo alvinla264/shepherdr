@@ -107,6 +107,8 @@ export function world(herdr?: ReturnType<typeof fakeHerdr>, o: { boot?: string; 
   /** the world's clock: the engine spaces starts by it, so a test moves time on instead of waiting 30 seconds for it */
   const clock = { now: Date.now() }
   engine.time = () => clock.now
+  // a deliberate switch asks its agent for a last note: in the world no one answers, so say so quickly
+  engine.handoffWait = 100
   const news: string[] = []
   /** the place each news is for: a project's place id, as its coordinator's chat has it */
   const newsTo: string[] = []

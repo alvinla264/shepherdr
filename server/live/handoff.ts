@@ -36,13 +36,13 @@ export interface Handoff {
   status?: string
 }
 
-/** text cut to `max` characters at a word, marker included, so a reader knows it goes on; cutting it again changes nothing */
+/** text cut to `max` characters at a word, marker included, so a reader knows it goes on; cutting it again changes
+ *  nothing. One word longer than the room is cut hard: `max` is the ceiling, never a suggestion */
 export function cap(text: string, max: number): string {
   const s = text.replace(/\s+$/g, '')
   if (s.length <= max) return s
-  const room = Math.max(1, max - ' … (cut)'.length)
-  const cut = s.slice(0, room + 1).replace(/\s+\S*$/, '')
-  return `${cut.length > 1 ? cut : s.slice(0, room)} … (cut)`
+  const head = s.slice(0, Math.max(1, max - ' … (cut)'.length))
+  return `${head.replace(/\s+\S*$/, '') || head} … (cut)`
 }
 
 /** a credential's known shape, and a named one's value */

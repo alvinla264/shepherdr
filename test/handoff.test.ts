@@ -111,7 +111,19 @@ test('its agent’s own status line, from what it reported', () => {
 })
 
 test('the living note is one card in the chat, replaced in place rather than appended', async () => {
-  const chats = new Chats({ record: () => undefined } as never, (k) => k, () => 'You')
+  const agents = {
+    record: () => undefined,
+    waiting: () => [],
+    sentLately: () => [],
+    failedLately: () => [],
+    holdOf: () => undefined,
+    status: () => 'gone',
+    info: () => undefined,
+    runtime: () => undefined,
+    runtimeHook: () => undefined,
+    background: () => undefined,
+  }
+  const chats = new Chats(agents as never, (k) => k, () => 'You')
   const key = `T-${Date.now()}/Agent`
   chats.post(key, { id: 'handoff-note:T-1', card: { id: 'handoff-note:T-1', note: { text: 'first: hello.txt', by: 'Codex' }, text: 'Handoff note' } })
   chats.post(key, { id: 'handoff-note:T-1', card: { id: 'handoff-note:T-1', note: { text: 'next: the tests', by: 'Codex' }, text: 'Handoff note' } })
