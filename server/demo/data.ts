@@ -456,6 +456,28 @@ export function chats(): Record<string, Chat> {
       c('GTM-17/Agent', 'Claude Code', [
         m({ who: 'you', text: 'Changelog entry for the webhook fix\n\n' + (tasks().find((t) => t.id === 'GTM-17')?.desc ?? '') }),
         m({ who: 'agent', text: 'Got it. I’ll write the entry once you say go.' }),
+        m({
+          who: 'agent',
+          card: {
+            id: 'handoff-note:GTM-17',
+            text: 'Handoff note',
+            note: {
+              text: 'Webhook fix is in GTM-15; next: the changelog entry in the same plain words as the others. Trap: the old signature test asserts the raw header. Files: CHANGELOG.md, docs/webhooks.md.',
+              by: 'Claude Code',
+            },
+          },
+        }),
+        m({
+          who: 'agent',
+          card: {
+            id: 'handoff:GTM-17:1',
+            text: 'Handoff to Codex',
+            handoff: {
+              to: 'Codex',
+              text: 'Restarted: the human restarted this task on Codex. Claude Code ran it until now; you carry on from here, in the same worktree and branch. Look at what is there and go on from it, don’t start over.\n\nThe brief as given:\n\nChangelog entry for the webhook fix\n\nAdd a changelog entry for the webhook signature fix in GTM-15, in the same plain words as the others. Don’t start yet, wait for a go. Report done and wait for my yes before merging.\n\nThe human said:\n\nAdd a changelog entry for the webhook signature fix in GTM-15, in the same plain words as the others.\n\nThe task’s handoff note (written by Claude Code, last at the switch):\n\nWebhook fix is in GTM-15; next: the changelog entry. Trap: the old signature test asserts the raw header.\n\nFacts:\n\nCommits on the branch so far:\n\nnone\n\nUncommitted changes (git status --short):\n\nnone\n\nThe agent before you (shepherdr status):\n\nIt reported ready: waiting for your go.',
+            },
+          },
+        }),
       ]),
       c(
         'HP-202/Agent',

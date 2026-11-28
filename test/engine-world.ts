@@ -9,7 +9,7 @@ process.env.SHEPHERDR_HOME = mkdtempSync(join(tmpdir(), 'shep-engine-'))
 export const { Engine } = await import('../server/live/engine/engine.ts')
 export const { Places, placeId } = await import('../server/live/places.ts')
 export const { Settings } = await import('../server/live/settings.ts')
-export const { settingsBlock } = await import('../server/live/prompts.ts')
+export const { settingsBlock, taskFirst } = await import('../server/live/prompts.ts')
 export const { writeJson } = await import('../server/store.ts')
 export const { fakeHerdr } = await import('./fake-herdr.ts')
 export const G = await import('../server/live/engine/git.ts')
@@ -64,12 +64,15 @@ export function world(herdr?: ReturnType<typeof fakeHerdr>, o: { boot?: string; 
     record: (key: string) => records[key],
     info: (key: string) => (status[key] && status[key] !== 'gone' && panes[key] ? { pane_id: panes[key] } : undefined),
     waiting: (key: string) => outbox.filter((k) => k === key),
+    drop: () => false,
     finish: async (key: string) => {
       if (records[key]) records[key].finished = true
       status[key] = 'gone'
       if (panes[key]) await herdr.h.closePane(panes[key])
     },
     interrupt: async () => undefined,
+    /** its pane, as agents.paneOf reads it: the agent there, or nothing when it is gone */
+    paneOf: async (key: string) => (status[key] && status[key] !== 'gone' && panes[key] ? { pane_id: panes[key], state: 'agent' } : undefined),
     stopTurn: async (key: string) => void (status[key] === 'working' && stopped.push(key)),
     restart: async (s: { key: string; first?: string; cwd: string; kind: string; pane?: () => Promise<string> }, before?: () => Promise<string | void>) => {
       const first = await before?.()
@@ -84,7 +87,7 @@ export function world(herdr?: ReturnType<typeof fakeHerdr>, o: { boot?: string; 
   const forgot: string[] = []
   /** agents whose turn was interrupted before a restart */
   const stopped: string[] = []
-  const posted: { key: string; id: string; question?: { kind: string; steps?: string[] }; card?: { text: string; restart?: boolean } }[] = []
+  const posted: { key: string; id: string; question?: { kind: string; steps?: string[] }; card?: { text: string; restart?: boolean; note?: { text: string; by: string }; handoff?: { to: string; text: string } } }[] = []
   /** what the agent's chat holds: its last reply, an open card of Shepherdr's, its CLI's own question */
   const chat: { reply?: string; card?: 'plan' | 'ask'; cardTitle?: string; question?: boolean; unseen?: string[]; messages?: { who: string; text?: string; card?: object }[] } = { reply: 'Which name do you want?' }
   const chats = {
@@ -104,6 +107,8 @@ export function world(herdr?: ReturnType<typeof fakeHerdr>, o: { boot?: string; 
   /** the world's clock: the engine spaces starts by it, so a test moves time on instead of waiting 30 seconds for it */
   const clock = { now: Date.now() }
   engine.time = () => clock.now
+  // a deliberate switch asks its agent for a last note: in the world no one answers, so say so quickly
+  engine.handoffWait = 100
   const news: string[] = []
   /** the place each news is for: a project's place id, as its coordinator's chat has it */
   const newsTo: string[] = []

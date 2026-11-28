@@ -6,6 +6,7 @@ import { type Mode } from '../../shared/types.ts'
 import { ROOT } from '../root.ts'
 import { has } from '../plugins.ts'
 import { BOX, helperDir } from './box.ts'
+import { handoffText, type Handoff } from './handoff.ts'
 
 /** where an agent finds Shepherdr's files: its checkout here; on another machine the helper's copy (install.ts) */
 const OWN = BOX ? helperDir(BOX.home) : ROOT
@@ -132,6 +133,7 @@ export function taskPrompt(t: { id: string; branch: string; base: string }, time
     commandLine(`${t.id}/Agent`),
     `You work in your own git worktree on branch ${t.branch} (from ${t.base}): commit there, and don't switch branches.`,
     times,
+    handoffInstruction(),
     has('browser') ? browserLine(t.id) : '',
   ].filter(Boolean).join('\n\n')
 }
@@ -148,26 +150,36 @@ export function taskFirst(t: { title: string; desc: string }) {
   return t.desc && t.desc !== t.title ? `${t.title}\n\n${t.desc}` : t.title
 }
 
-/** what a backup agent is told after the brief when it takes a task over: from whom and why, and what was done */
-export function handOverLine(o: { from: string; why: string; commits: string; changes: string; chat: string }) {
+/** what a backup agent is told when it takes a task over: from whom and why, and the package those before it left */
+export function handOverLine(o: { from: string; why: string; handoff: Handoff }) {
   return [
     `Taking over: ${o.from} worked on this task until now and can't go on (${o.why}). You carry on in the same worktree and branch: look at what is there and go on from it, don't start over.`,
-    `Commits on the branch so far:\n${o.commits || 'none'}`,
-    `Uncommitted changes:\n${o.changes || 'none'}`,
-    ...(o.chat ? [`The chat so far, latest last:\n\n${o.chat}`] : []),
+    handoffText(o.handoff),
   ].join('\n\n')
 }
 
-/** what an agent started again on another CLI is told (a task's after its brief): who ran its role until now, and
- *  what was said and done; a task's commits and changes, none for a coordinator */
-export function restartLine(o: { from: string; to: string; chat: string; commits?: string; changes?: string }) {
-  const task = o.commits !== undefined
+/** what an agent started again on another CLI is told: who ran its role until now, and the package it left; a task's
+ *  brief, words and facts, a coordinator's chat (none of a task there) */
+export function restartLine(o: { from: string; to: string; chat?: string; handoff?: Handoff }) {
+  const task = !!o.handoff
   return [
     `Restarted: the human restarted this ${task ? 'task' : 'chat'} on ${o.to}. ${o.from} ran it until now; you carry on from here, in the same ${task ? 'worktree and branch' : 'folder'}. Look at what is there and go on from it, don't start over.`,
-    ...(task ? [`Commits on the branch so far:\n${o.commits || 'none'}`, `Uncommitted changes:\n${o.changes || 'none'}`] : []),
-    ...(o.chat ? [`The chat so far, latest last:\n\n${o.chat}`] : []),
+    task ? handoffText(o.handoff!) : '',
+    !task && o.chat ? `The chat so far, latest last:\n\n${o.chat}` : '',
     `If you were in the middle of something, carry on; else reply in one short line that you are here and end your turn.`,
-  ].join('\n\n')
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/** asked of an agent that is still there, before another CLI takes its task over: a note for whoever comes next */
+export function finalNoteAsk(to: string) {
+  return `The human is switching this task to ${to}, so you are about to be replaced. Write your handoff note for whoever takes over now: what is done, what is next, the traps and the files you touched, in a few lines (shepherdr handoff "…"). Then end your turn.`
+}
+
+/** what a task's agent is told when it starts: keep the note a new agent could take over from */
+export function handoffInstruction() {
+  return `Keep your handoff note current at each milestone (shepherdr handoff "<what is done, what is next, the traps, the files you touched>", a few lines): it is replaced in place each time, shows in the chat, and is what another agent takes this task over from if you stop.`
 }
 
 /** what an agent started again on its own CLI is told, its session resumed (a model or an effort changed) */

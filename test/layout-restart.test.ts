@@ -167,6 +167,37 @@ describe.skipIf(!browser)('restarting an agent', () => {
     await ctx.close()
   }, 30_000)
 
+  test('the handoff note and the package another CLI was handed show as cards, fitting a phone', async () => {
+    const key = 'GTM-17/Agent'
+    const before = world.chats[key].messages
+    const at = Date.now()
+    world.chats[key].messages = [
+      ...before,
+      { id: 'handoff-note:GTM-17', who: 'agent', at, card: { id: 'handoff-note:GTM-17', note: { text: 'hello.txt added; next the tests', by: 'Claude Code' }, text: 'Handoff note' } },
+      {
+        id: 'handoff:GTM-17:1',
+        who: 'agent',
+        at: at + 1,
+        card: { id: 'handoff:GTM-17:1', handoff: { to: 'Codex', text: 'The brief as given:\n\nAdd hello.txt\n\nThe human said:\n\nUse blue' }, text: 'Handoff to Codex' },
+      },
+    ]
+    const page = await browser!.newPage({ viewport: { width: 320, height: 844 } })
+    try {
+      await page.goto(`http://127.0.0.1:${server!.port}/?place=p:vm-str:gtm&task=GTM-17`)
+      const note = page.locator('[data-handoff-note]').last()
+      await note.waitFor()
+      expect(await note.textContent()).toContain('hello.txt added; next the tests')
+      const card = page.locator('[data-handoff-card]').last()
+      await card.waitFor()
+      expect(await card.textContent()).toContain('Handoff to Codex')
+      expect(await card.textContent()).toContain('Use blue')
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
+    } finally {
+      world.chats[key].messages = before
+      await page.close()
+    }
+  }, 30_000)
+
   test('a model its CLI no longer offers cannot be restarted on: the sheet says so and holds Restart until one of its own is picked (phone)', async () => {
     const key = 'GTM-17/Agent'
     const was = world.chats[key].agent

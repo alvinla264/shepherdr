@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { sh, repo, world, until, started, placeId, settingsBlock, writeJson, fakeHerdr } from './engine-world.ts'
+import { sh, repo, world, until, started, placeId, settingsBlock, taskFirst, writeJson, fakeHerdr } from './engine-world.ts'
 const { fitStatus, reportOf, STALL_QUIET } = await import('../server/live/engine/engine.ts')
 
 describe('a task is its brief and one agent', () => {
@@ -449,7 +449,9 @@ describe('a turn the provider cut off', () => {
     sh('echo hi > hello.txt && git add -A && git commit -qm "Add hello.txt"', t.worktree!)
     writeFileSync(join(t.worktree!, 'more.txt'), 'more\n')
     w.chat.messages = [
-      { who: 'you', text: 'Say hello\n\nAdd hello.txt. Merge when done.' },
+      // the brief as its agent got it: the human's first message, left out of "The human said:" (it has its own part)
+      { who: 'you', text: taskFirst(t) },
+      { who: 'you', text: 'Use blue for the greeting' },
       { who: 'agent', text: 'Added hello.txt; next the tests.' },
       { who: 'agent', card: {}, text: 'SHE-1 needs you' },
     ]
@@ -458,12 +460,16 @@ describe('a turn the provider cut off', () => {
     const s = w.started.filter((x) => x.key === key)
     expect(s).toHaveLength(2)
     expect(s[1]).toMatchObject({ kind: 'codex', model: 'default', cwd: t.worktree })
-    expect(s[1].first).toStartWith('Say hello\n\nAdd hello.txt. Merge when done.')
-    expect(s[1].first).toContain("Taking over: Claude Code worked on this task until now and can't go on (out of allowance until 5pm)")
-    expect(s[1].first).toContain('Add hello.txt')
+    expect(s[1].first).toStartWith("Taking over: Claude Code worked on this task until now and can't go on (out of allowance until 5pm)")
+    expect(s[1].first).toContain('The brief as given:\n\nSay hello\n\nAdd hello.txt. Merge when done.')
+    expect(s[1].first).toContain('The human said:\n\nUse blue for the greeting')
+    expect(s[1].first).toContain('Commits on the branch so far:')
     expect(s[1].first).toContain('?? more.txt')
-    expect(s[1].first).toContain('Claude Code: Added hello.txt; next the tests.')
+    expect(s[1].first).toContain('What changed on the branch (git diff --stat):')
+    expect(s[1].first).toContain('The agent before you (shepherdr status):')
     expect(s[1].first).not.toContain('needs you')
+    // the human sees what was passed: one card named for the CLI that took over
+    expect(w.posted.find((p) => p.card?.handoff)).toMatchObject({ card: { handoff: { to: 'Codex' } } })
     expect(t.tookOver).toMatchObject({ from: 'claude', to: 'codex', why: 'out of allowance until 5pm' })
     expect(w.posted.some((p) => p.key === key && p.id.startsWith('takeover:'))).toBe(true)
     expect(w.engine.view(t)).toMatchObject({ status: 'work', on: 'Codex' })
@@ -493,6 +499,9 @@ describe('restarting a task agent', () => {
     expect(s[1].first).toContain('restarted you on Claude Code (Sonnet 5.5, low), with your session as it was')
     expect(t.agent).toEqual({ kind: 'claude', model: 'claude-sonnet-5-5', effort: 'low' })
     expect(w.posted.find((p) => p.key === key && p.id.startsWith('restart:'))?.card).toMatchObject({ restart: true, text: 'Restarted on Claude Code (Sonnet 5.5, low)' })
+    // the same CLI keeps its session: no note asked for, none handed over, no card
+    expect(w.sent.filter((s) => s.key === key && s.text.includes('shepherdr handoff'))).toHaveLength(0)
+    expect(w.posted.some((p) => p.card?.handoff)).toBe(false)
   })
 
   test('on another CLI it takes over with the brief, the branch so far and the chat; the worktree and branch stay', async () => {
@@ -502,7 +511,8 @@ describe('restarting a task agent', () => {
     sh('echo hi > hello.txt && git add -A && git commit -qm "Add hello.txt"', t.worktree!)
     writeFileSync(join(t.worktree!, 'more.txt'), 'more\n')
     w.chat.messages = [
-      { who: 'you', text: 'Say hello\n\nAdd hello.txt. Merge when done.' },
+      { who: 'you', text: taskFirst(t) },
+      { who: 'you', text: 'Use blue for the greeting' },
       { who: 'agent', text: 'Added hello.txt; next the tests.' },
     ]
     const head = sh('git rev-parse HEAD', t.worktree!)
@@ -510,16 +520,109 @@ describe('restarting a task agent', () => {
     await w.engine.restart(t.id, { kind: 'codex' })
     const s = w.started.filter((x) => x.key === key)
     expect(s[1]).toMatchObject({ kind: 'codex', cwd: t.worktree })
-    expect(s[1].first).toContain('Say hello\n\nAdd hello.txt. Merge when done.')
+    expect(s[1].first).toContain('The brief as given:\n\nSay hello\n\nAdd hello.txt. Merge when done.')
     expect(s[1].first).toContain('Claude Code ran it until now')
-    expect(s[1].first).toContain('Add hello.txt')
+    expect(s[1].first).toContain('The human said:\n\nUse blue for the greeting')
     expect(s[1].first).toContain('?? more.txt')
-    expect(s[1].first).toContain('Claude Code: Added hello.txt; next the tests.')
     expect(w.stopped).toEqual([])
+    expect(w.posted.find((p) => p.card?.handoff)?.card?.handoff).toMatchObject({ to: 'Codex' })
     expect(sh('git rev-parse HEAD', t.worktree!)).toBe(head)
     expect(sh('git branch --show-current', t.worktree!)).toBe(t.branch!)
     expect(existsSync(join(t.worktree!, 'more.txt'))).toBe(true)
     expect(w.engine.view(t)).toMatchObject({ on: 'Codex' })
+  })
+
+  test('its agent keeps one handoff note, replaced in place, and it reaches the next agent', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const { t, key } = await started(w, repo(), 'restart-note')
+    w.engine.handoff(t.id, 'hello.txt added; next the tests')
+    w.engine.handoff(t.id, 'tests pass; next the docs')
+    // one note per task, kept in the task, the card replaced in place (the same id, never a new one)
+    expect(t.handoff).toMatchObject({ text: 'tests pass; next the docs', by: 'Claude Code' })
+    const notes = w.posted.filter((p) => p.card?.note)
+    expect(notes.map((p) => p.id)).toEqual([`handoff-note:${t.id}`, `handoff-note:${t.id}`])
+    expect(notes.at(-1)!.card!.note!.text).toBe('tests pass; next the docs')
+    w.agentIs(key, 'gone')
+    await w.engine.restart(t.id, { kind: 'codex' })
+    const first = w.started.filter((x) => x.key === key)[1]!.first!
+    expect(first).toContain("The task's handoff note (written by Claude Code, kept current while it worked):\n\ntests pass; next the docs")
+    expect(first.match(/tests pass; next the docs/g)).toHaveLength(1)
+  })
+
+  test('a deliberate switch asks once for a last note, bounded, and the note is said to be from the switch', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const { t, key } = await started(w, repo(), 'restart-ask')
+    w.engine.handoffWait = 5000
+    w.agentIs(key, 'idle')
+    const p = w.engine.restart(t.id, { kind: 'codex' })
+    await until(() => w.sent.some((x) => x.key === key && x.text.includes('shepherdr handoff')))
+    w.engine.handoff(t.id, 'last words at the switch')
+    await p
+    const first = w.started.filter((x) => x.key === key)[1]!.first!
+    expect(first).toContain('last at the switch')
+    expect(first).toContain('last words at the switch')
+    expect(w.sent.filter((x) => x.key === key && x.text.includes('shepherdr handoff'))).toHaveLength(1)
+  })
+
+  test('a turn that will not stop does not hold the switch back: another CLI takes over regardless', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const { t, key } = await started(w, repo(), 'restart-stuck')
+    w.agentIs(key, 'working')
+    w.agents.stopTurn = async () => {
+      throw new Error('It is still working after an interrupt: try again in a moment.')
+    }
+    await w.engine.restart(t.id, { kind: 'codex' })
+    const s = w.started.filter((x) => x.key === key)
+    expect(s).toHaveLength(2)
+    expect(w.records[key]!.kind).toBe('codex')
+    // its own CLI keeps the old rule: a turn that will not stop holds a resume back
+    w.agentIs(key, 'working')
+    await expect(w.engine.restart(t.id, { kind: 'codex' })).rejects.toThrow('still working')
+  })
+
+  test('a note written mid-turn does not cut that turn short: the switch gives the turn the rest of the bound', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const { t, key } = await started(w, repo(), 'restart-midturn')
+    w.engine.handoffWait = 4000
+    w.agentIs(key, 'working')
+    const p = w.engine.restart(t.id, { kind: 'codex' })
+    await until(() => w.sent.some((x) => x.key === key && x.text.includes('shepherdr handoff')))
+    w.engine.handoff(t.id, 'note written mid-turn')
+    await Bun.sleep(300)
+    // its note is in, but its turn still runs: the switch waits for the turn, it does not interrupt it for this
+    expect(w.started.filter((x) => x.key === key)).toHaveLength(1)
+    w.agentIs(key, 'idle')
+    await p
+    expect(w.stopped).toEqual([])
+    expect(w.started.filter((x) => x.key === key)).toHaveLength(2)
+  })
+
+  test('an agent that does not answer is not waited on forever: the switch goes on', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const { t, key } = await started(w, repo(), 'restart-silent')
+    w.engine.handoffWait = 60
+    w.agentIs(key, 'idle')
+    await w.engine.restart(t.id, { kind: 'codex' })
+    expect(w.sent.some((x) => x.key === key && x.text.includes('shepherdr handoff'))).toBe(true)
+    expect(w.started.filter((x) => x.key === key)).toHaveLength(2)
+  })
+
+  test('an agent that is gone is not asked anything: the switch still completes', async () => {
+    const w = world()
+    w.engine.installed = () => true
+    const { t, key } = await started(w, repo(), 'restart-dead')
+    w.agentIs(key, 'gone')
+    w.engine.handoffWait = 60_000
+    await w.engine.restart(t.id, { kind: 'codex' })
+    expect(w.sent.filter((x) => x.key === key && x.text.includes('shepherdr handoff'))).toHaveLength(0)
+    const s = w.started.filter((x) => x.key === key)
+    expect(s).toHaveLength(2)
+    expect(s[1]!.first).not.toContain('The agent that ran it before you wrote:')
   })
 
   test('a Done task, or a CLI not installed here, is refused', async () => {

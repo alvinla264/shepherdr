@@ -209,6 +209,12 @@ Task agents
                                                  how far along you are, in your own words: the task's status line (at
                                                  most ${STATUS_MAX} characters), its pie and the time left (it counts down
                                                  while you work). Run it at the start and at each natural step
+  shepherdr handoff "<note>"                     (a task's agent) or shepherdr handoff <id> "<note>" (anyone): the
+                                                 note for whoever takes this task over, in a few lines: what is done,
+                                                 what is next, the traps, the files you touched. One per task,
+                                                 replaced in place each time, shown as a card in its chat, and
+                                                 handed to another CLI that takes the task over. Keep it current
+                                                 at each milestone; an obvious credential is stripped from it
 
 Chat
   shepherdr ask "<question>" --choice "<label>" ... [--desc "<label>=<one line>"] [--other] [--multi] [--ordinary]

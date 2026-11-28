@@ -544,6 +544,10 @@ export interface UpdateCard {
   red?: string
   /** its agent started again (text: "Restarted on Codex (GPT-6-Sol, high)") */
   restart?: boolean
+  /** its agent's living handoff note (shepherdr handoff): one card per task, replaced in place; `text` is its title */
+  note?: { text: string; by: string }
+  /** a task handed to another CLI, alive or after it stopped: the package the next agent got, shown whole */
+  handoff?: { to: string; text: string }
   /** a task that needs you: a copy of what it asks, answered here as in its own chat */
   ask?: CardAsk
 }
